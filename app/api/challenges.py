@@ -6,6 +6,79 @@ from app.database import supabase
 
 router = APIRouter()
 
+SEED_CHALLENGES = [
+    {
+        "title": "Desafío Salud Total",
+        "description": "30 días de hábitos saludables: ejercicio, alimentación consciente y buen descanso. Transforma tu cuerpo y mente.",
+        "category": "SALUD",
+        "difficulty": "hard",
+        "duration_days": 30,
+        "max_participants": 1000,
+        "reward": "🏆 Premium Gratis 1 Mes",
+        "is_public": True,
+        "start_date": datetime.utcnow().isoformat(),
+    },
+    {
+        "title": "Maratón de Productividad",
+        "description": "30 días de máxima productividad. Despierta temprano, organiza tu día y cumple tus objetivos sin excusas.",
+        "category": "PRODUCTIVIDAD",
+        "difficulty": "extreme",
+        "duration_days": 30,
+        "max_participants": 1000,
+        "reward": "💎 Badge Productividad Extrema",
+        "is_public": True,
+        "start_date": datetime.utcnow().isoformat(),
+    },
+    {
+        "title": "Reto Fitness 30",
+        "description": "Ejercítate al menos 30 minutos cada día durante 30 días. Sin días de descanso, sin excusas.",
+        "category": "EJERCICIO",
+        "difficulty": "hard",
+        "duration_days": 30,
+        "max_participants": 500,
+        "reward": "💪 Badge Guerrero Fitness",
+        "is_public": True,
+        "start_date": datetime.utcnow().isoformat(),
+    },
+    {
+        "title": "Desafío Mindfulness",
+        "description": "Medita al menos 10 minutos cada día y registra tu reflexión. Conecta con tu interior durante 30 días.",
+        "category": "MINDFULNESS",
+        "difficulty": "medium",
+        "duration_days": 30,
+        "max_participants": 1000,
+        "reward": "🧘 Badge Calma Interior",
+        "is_public": True,
+        "start_date": datetime.utcnow().isoformat(),
+    },
+    {
+        "title": "Reto Conexión Social",
+        "description": "Fortalece tus vínculos. Contacta a alguien, envía un mensaje positivo o participa en comunidad cada día.",
+        "category": "SOCIAL",
+        "difficulty": "easy",
+        "duration_days": 30,
+        "max_participants": 1000,
+        "reward": "🤝 Badge Conexión Social",
+        "is_public": True,
+        "start_date": datetime.utcnow().isoformat(),
+    },
+]
+
+
+def seed_challenges_on_startup():
+    """Insert 5 initial challenges if table is empty."""
+    if not supabase:
+        return
+    try:
+        existing = supabase.table("challenges").select("id").limit(1).execute()
+        if existing.data:
+            return
+        for c in SEED_CHALLENGES:
+            supabase.table("challenges").insert(c).execute()
+        print("✅ 5 desafíos iniciales creados")
+    except Exception as e:
+        print(f"⚠️ Seed error: {e}")
+
 def is_valid_uuid(value: str) -> bool:
     """Check if a string is a valid UUID"""
     try:

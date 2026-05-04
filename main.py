@@ -1,11 +1,21 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from contextlib import asynccontextmanager
 from app.api import habits, users, articles, settings, challenges, auth
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """Run seed on startup."""
+    challenges.seed_challenges_on_startup()
+    yield
+
 
 app = FastAPI(
     title="Habitly API",
     description="API para la app de seguimiento de hábitos",
-    version="1.0.0"
+    version="1.0.0",
+    lifespan=lifespan,
 )
 
 app.add_middleware(
@@ -23,9 +33,11 @@ app.include_router(articles.router, prefix="/api/articles", tags=["Articles"])
 app.include_router(settings.router, prefix="/api/settings", tags=["Settings"])
 app.include_router(challenges.router, prefix="/api/challenges", tags=["Challenges"])
 
+
 @app.get("/")
 async def root():
     return {"message": "Habitly API", "status": "running"}
+
 
 @app.get("/health")
 async def health():
