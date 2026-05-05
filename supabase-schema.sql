@@ -88,11 +88,14 @@ CREATE TABLE IF NOT EXISTS challenges (
     category TEXT NOT NULL,
     difficulty TEXT DEFAULT 'medium',
     duration_days INTEGER DEFAULT 30,
-    max_participants INTEGER DEFAULT 100,
+    max_participants INTEGER DEFAULT 1000,
     creator_id UUID REFERENCES users(id),
     reward TEXT,
     is_public BOOLEAN DEFAULT true,
+    is_premium_required BOOLEAN DEFAULT false,
     start_date TIMESTAMP WITH TIME ZONE,
+    end_date TIMESTAMP WITH TIME ZONE,
+    status TEXT DEFAULT 'active',
     created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
 );
 
@@ -101,10 +104,25 @@ CREATE TABLE IF NOT EXISTS challenge_participants (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     challenge_id UUID REFERENCES challenges(id) ON DELETE CASCADE,
     user_id UUID REFERENCES users(id) ON DELETE CASCADE,
+    user_name TEXT,
     joined_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
     completed_at TIMESTAMP WITH TIME ZONE,
     progress INTEGER DEFAULT 0,
+    current_streak INTEGER DEFAULT 0,
+    best_streak INTEGER DEFAULT 0,
+    total_points INTEGER DEFAULT 0,
     UNIQUE(challenge_id, user_id)
+);
+
+-- Challenge Winners table
+CREATE TABLE IF NOT EXISTS challenge_winners (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    challenge_id UUID REFERENCES challenges(id) ON DELETE CASCADE,
+    year_month TEXT NOT NULL,
+    winners JSONB NOT NULL,
+    reward_given BOOLEAN DEFAULT false,
+    reward_given_at TIMESTAMP WITH TIME ZONE,
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
 );
 
 -- Create indexes for better performance
@@ -115,6 +133,10 @@ CREATE INDEX IF NOT EXISTS idx_habit_logs_date ON habit_logs(date);
 CREATE INDEX IF NOT EXISTS idx_articles_category ON articles(category);
 CREATE INDEX IF NOT EXISTS idx_articles_published ON articles(published_at DESC);
 CREATE INDEX IF NOT EXISTS idx_saved_articles_user ON saved_articles(user_id);
+CREATE INDEX IF NOT EXISTS idx_challenges_status ON challenges(status);
+CREATE INDEX IF NOT EXISTS idx_challenge_participants_challenge ON challenge_participants(challenge_id);
+CREATE INDEX IF NOT EXISTS idx_challenge_participants_user ON challenge_participants(user_id);
+CREATE INDEX IF NOT EXISTS idx_challenge_winners_challenge ON challenge_winners(challenge_id);
 
 -- Enable Row Level Security (RLS)
 ALTER TABLE users ENABLE ROW LEVEL SECURITY;
