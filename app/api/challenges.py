@@ -19,8 +19,8 @@ class LeaveChallengeRequest(BaseModel):
 
 SEED_CHALLENGES = [
     {
-        "title": "Desafío Salud Total",
-        "description": "30 días de hábitos saludables",
+        "title": "Desafï¿½o Salud Total",
+        "description": "30 dï¿½as de hï¿½bitos saludables",
         "category": "SALUD",
         "difficulty": "hard",
         "duration_days": 30,
@@ -33,8 +33,8 @@ SEED_CHALLENGES = [
         "start_date": datetime.utcnow().isoformat(),
     },
     {
-        "title": "Maratón de Productividad",
-        "description": "30 días de máxima productividad",
+        "title": "Maratï¿½n de Productividad",
+        "description": "30 dï¿½as de mï¿½xima productividad",
         "category": "PRODUCTIVIDAD",
         "difficulty": "extreme",
         "duration_days": 30,
@@ -48,7 +48,7 @@ SEED_CHALLENGES = [
     },
     {
         "title": "Reto Fitness 30",
-        "description": "Ejercítate 30 min cada día",
+        "description": "Ejercï¿½tate 30 min cada dï¿½a",
         "category": "EJERCICIO",
         "difficulty": "hard",
         "duration_days": 30,
@@ -61,8 +61,8 @@ SEED_CHALLENGES = [
         "start_date": datetime.utcnow().isoformat(),
     },
     {
-        "title": "Desafío Mindfulness",
-        "description": "Medita 10 minutos cada día",
+        "title": "Desafï¿½o Mindfulness",
+        "description": "Medita 10 minutos cada dï¿½a",
         "category": "MINDFULNESS",
         "difficulty": "medium",
         "duration_days": 30,
@@ -75,13 +75,13 @@ SEED_CHALLENGES = [
         "start_date": datetime.utcnow().isoformat(),
     },
     {
-        "title": "Reto Conexión Social",
-        "description": "Fortalece tus vínculos",
+        "title": "Reto Conexiï¿½n Social",
+        "description": "Fortalece tus vï¿½nculos",
         "category": "SOCIAL",
         "difficulty": "easy",
         "duration_days": 30,
         "max_participants": 1000,
-        "reward": "?? Badge Conexión Social",
+        "reward": "?? Badge Conexiï¿½n Social",
         "is_premium_required": False,
         "is_public": True,
         "is_live": True,
@@ -89,13 +89,13 @@ SEED_CHALLENGES = [
         "start_date": datetime.utcnow().isoformat(),
     },
     {
-        "title": "Desafío Premium Élite",
+        "title": "Desafï¿½o Premium ï¿½lite",
         "description": "SOLO PREMIUM: El reto definitivo",
         "category": "SALUD",
         "difficulty": "extreme",
         "duration_days": 30,
         "max_participants": 100,
-        "reward": "?? 1 AÑO PREMIUM GRATIS",
+        "reward": "?? 1 Aï¿½O PREMIUM GRATIS",
         "is_premium_required": True,
         "is_public": True,
         "is_live": True,
@@ -103,13 +103,13 @@ SEED_CHALLENGES = [
         "start_date": datetime.utcnow().isoformat(),
     },
     {
-        "title": "Desafío Titán Extremo",
-        "description": "EXCLUSIVO PREMIUM: 45 días de entrenamiento militar, dieta estricta y meditación avanzada. Solo para guerreros.",
+        "title": "Desafï¿½o Titï¿½n Extremo",
+        "description": "EXCLUSIVO PREMIUM: 45 dï¿½as de entrenamiento militar, dieta estricta y meditaciï¿½n avanzada. Solo para guerreros.",
         "category": "SALUD",
         "difficulty": "extreme",
         "duration_days": 45,
         "max_participants": 50,
-        "reward": "?????? Titán Habitly + 2 Años Premium",
+        "reward": "?????? Titï¿½n Habitly + 2 Aï¿½os Premium",
         "is_premium_required": True,
         "is_public": True,
         "is_live": True,
@@ -127,7 +127,7 @@ def seed_challenges_on_startup():
             return
         for c in SEED_CHALLENGES:
             supabase.table("challenges").insert(c).execute()
-        print("? 7 desafíos iniciales creados")
+        print("? 7 desafï¿½os iniciales creados")
     except Exception as e:
         print(f"?? Seed error: {e}")
 
@@ -166,7 +166,7 @@ async def get_challenge(challenge_id: str):
 @router.post("/join")
 async def join_challenge(request: JoinChallengeRequest):
     if not supabase:
-        return {"id": f"participant-{request.user_id}", "challenge_id": request.challenge_id, "user_id": request.user_id}
+        return {"id": f"participant-{request.user_id}", "challenge_id": request.challenge_id, "user_id": request.user_id, "user_name": request.user_name}
     if not is_valid_uuid(request.challenge_id) or not is_valid_uuid(request.user_id):
         raise HTTPException(status_code=400, detail="Invalid ID format")
     try:
@@ -174,10 +174,15 @@ async def join_challenge(request: JoinChallengeRequest):
         if challenge_resp.data:
             is_premium_required = challenge_resp.data[0].get("is_premium_required", False)
             if is_premium_required and not request.is_premium:
-                raise HTTPException(status_code=403, detail="Este desafío requiere suscripción Premium")
+                raise HTTPException(status_code=403, detail="Este desafio requiere suscripcion Premium")
+        
+        # Check if already joined
         existing = supabase.table("challenge_participants").select("*").eq("challenge_id", request.challenge_id).eq("user_id", request.user_id).execute()
         if existing.data:
+            print(f"User {request.user_id} already joined challenge {request.challenge_id}")
             return existing.data[0]
+        
+        # Insert new participant - use select() to return the inserted data
         data = {
             "challenge_id": request.challenge_id,
             "user_id": request.user_id,
@@ -188,9 +193,20 @@ async def join_challenge(request: JoinChallengeRequest):
             "best_streak": 0,
             "total_points": 0
         }
-        response = supabase.table("challenge_participants").insert(data).execute()
-        return response.data[0] if response.data else data
+        print(f"Inserting participant: {data}")
+        response = supabase.table("challenge_participants").insert(data).select().execute()
+        print(f"Insert response: {response.data}")
+        
+        if response.data:
+            return response.data[0]
+        else:
+            # Fallback: fetch the inserted data
+            inserted = supabase.table("challenge_participants").select("*").eq("challenge_id", request.challenge_id).eq("user_id", request.user_id).execute()
+            if inserted.data:
+                return inserted.data[0]
+            return data
     except Exception as e:
+        print(f"Error joining challenge: {e}")
         raise HTTPException(status_code=500, detail=f"Database error: {str(e)}")
 
 @router.post("/leave")
