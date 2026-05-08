@@ -194,7 +194,7 @@ async def join_challenge(request: JoinChallengeRequest):
             "total_points": 0
         }
         print(f"Inserting participant: {data}")
-        response = supabase.table("challenge_participants").insert(data).select().execute()
+        response = supabase.table("challenge_participants").insert(data).execute()
         print(f"Insert response: {response.data}")
         
         if response.data:
