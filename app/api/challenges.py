@@ -17,6 +17,12 @@ class LeaveChallengeRequest(BaseModel):
     challenge_id: str
     user_id: str
 
+class UpdateProgressRequest(BaseModel):
+    user_id: str
+    total_points: Optional[int] = None
+    current_streak: Optional[int] = None
+    progress: Optional[int] = None
+
 SEED_CHALLENGES = [
     {
         "title": "Desaf�o Salud Total",
@@ -138,16 +144,24 @@ def is_valid_uuid(value: str) -> bool:
     except ValueError:
         return False
 
+def _add_participant_count(challenge: dict) -> dict:
+    """Add participant count to a challenge dict."""
+    try:
+        count_resp = supabase.table("challenge_participants").select("id").eq("challenge_id", challenge["id"]).execute()
+        challenge["participants_count"] = len(count_resp.data) if count_resp.data else 0
+    except Exception:
+        challenge["participants_count"] = 0
+    challenge.setdefault("is_live", True)
+    challenge.setdefault("is_active", True)
+    return challenge
+
 @router.get("")
 async def get_challenges():
     if not supabase:
         return []
     response = supabase.table("challenges").select("*").order("created_at", desc=True).execute()
     challenges = response.data if response.data else []
-    for c in challenges:
-        c.setdefault("is_live", True)
-        c.setdefault("is_active", True)
-    return challenges
+    return [_add_participant_count(c) for c in challenges]
 
 @router.get("/{challenge_id}")
 async def get_challenge(challenge_id: str):
@@ -159,9 +173,7 @@ async def get_challenge(challenge_id: str):
     if not response.data:
         raise HTTPException(status_code=404, detail="Challenge not found")
     challenge = response.data[0]
-    challenge.setdefault("is_live", True)
-    challenge.setdefault("is_active", True)
-    return challenge
+    return _add_participant_count(challenge)
 
 @router.post("/join")
 async def join_challenge(request: JoinChallengeRequest):
@@ -218,6 +230,32 @@ async def leave_challenge(request: LeaveChallengeRequest):
     try:
         response = supabase.table("challenge_participants").delete().eq("challenge_id", request.challenge_id).eq("user_id", request.user_id).execute()
         return {"success": True}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Database error: {str(e)}")
+
+@router.patch("/{challenge_id}/progress")
+async def update_progress(challenge_id: str, request: UpdateProgressRequest):
+    if not supabase:
+        return {"success": True}
+    if not is_valid_uuid(challenge_id) or not is_valid_uuid(request.user_id):
+        raise HTTPException(status_code=400, detail="Invalid ID format")
+    try:
+        update_data = {}
+        if request.total_points is not None:
+            update_data["total_points"] = request.total_points
+        if request.current_streak is not None:
+            update_data["current_streak"] = request.current_streak
+        if request.progress is not None:
+            update_data["progress"] = request.progress
+        if not update_data:
+            raise HTTPException(status_code=400, detail="No fields to update")
+
+        response = supabase.table("challenge_participants").update(update_data).eq("challenge_id", challenge_id).eq("user_id", request.user_id).execute()
+        if response.data:
+            return response.data[0]
+        raise HTTPException(status_code=404, detail="Participant not found")
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Database error: {str(e)}")
 
