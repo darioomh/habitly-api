@@ -329,7 +329,7 @@ async def track_challenge_invite(challenge_id: str, payload: Dict[str, Any] = Bo
         raise HTTPException(status_code=500, detail=f"Database error: {str(e)}")
 
 
-@router.get("/points-log")
+@router.get("/points-log/list")
 async def get_challenge_points_log(
     challenge_id: Optional[str] = Query(None),
     user_id: Optional[str] = Query(None),
