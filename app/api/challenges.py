@@ -291,6 +291,48 @@ async def get_leaderboard(challenge_id: str):
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Database error: {str(e)}")
 
+
+@router.post("/auto-link-habits")
+async def auto_link_habits(category: Optional[str] = None):
+    """Auto-link habits to challenges by matching category (case-insensitive).
+    If category is provided, only process that category.
+    """
+    if not supabase:
+        return {"linked": 0, "details": [], "note": "Supabase not configured"}
+    try:
+        # fetch active challenges
+        ch_resp = supabase.table("challenges").select("id,category,title,is_active").execute()
+        challenges = ch_resp.data if ch_resp.data else []
+        # fetch habits
+        habits_resp = supabase.table("habits").select("id,category").execute()
+        habits = habits_resp.data if habits_resp.data else []
+
+        linked = 0
+        details = []
+        for ch in challenges:
+            if not ch.get("is_active"):
+                continue
+            ch_cat = (ch.get("category") or "").strip().upper()
+            if category and ch_cat != (category.strip().upper()):
+                continue
+            for h in habits:
+                h_cat = (h.get("category") or "").strip().upper()
+                if not h_cat or h_cat != ch_cat:
+                    continue
+                # check existing mapping
+                exists = supabase.table("challenge_habits").select("id").eq("challenge_id", ch["id"]).eq("habit_id", h["id"]).execute()
+                if exists.data:
+                    continue
+                # insert mapping
+                supabase.table("challenge_habits").insert({"challenge_id": ch["id"], "habit_id": h["id"], "created_at": datetime.utcnow().isoformat()}).execute()
+                linked += 1
+                details.append({"challenge_id": ch["id"], "habit_id": h["id"], "challenge_title": ch.get("title")})
+
+        return {"linked": linked, "details": details}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Database error: {str(e)}")
+
+
 @router.post("/{challenge_id}/invites")
 async def track_challenge_invite(challenge_id: str, payload: Dict[str, Any] = Body(...)):
     if not supabase:
