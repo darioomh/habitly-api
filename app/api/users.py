@@ -1,7 +1,8 @@
-from fastapi import APIRouter, HTTPException, Form
+from fastapi import APIRouter, HTTPException, Form, Body
 from datetime import datetime, timedelta, date
 from typing import Optional
 from collections import Counter
+from pydantic import BaseModel
 from app.database import supabase
 
 router = APIRouter()
@@ -127,7 +128,28 @@ async def get_user_stats(user_id: str):
     current_streak, best_streak = _compute_streaks(log_dates)
 
     # ── XP & Level ────────────────────────────────────────────────────────
-    total_xp = total_completed * 10
+    try:
+        # XP from habit logs (xp_earned field)
+        logs_xp_resp = supabase.table("habit_logs").select("xp_earned").eq("user_id", user_id).execute()
+        xp_from_logs = sum(int(r.get("xp_earned") or 0) for r in (logs_xp_resp.data or []))
+    except Exception:
+        xp_from_logs = total_completed * 10
+
+    try:
+        # XP / points earned in challenges
+        cp_resp = supabase.table("challenge_participants").select("total_points").eq("user_id", user_id).execute()
+        xp_from_challenges = sum(int(r.get("total_points") or 0) for r in (cp_resp.data or []))
+    except Exception:
+        xp_from_challenges = 0
+
+    try:
+        # Season points (if applicable)
+        sp_resp = supabase.table("season_participants").select("total_points").eq("user_id", user_id).execute()
+        xp_from_seasons = sum(int(r.get("total_points") or 0) for r in (sp_resp.data or []))
+    except Exception:
+        xp_from_seasons = 0
+
+    total_xp = xp_from_logs + xp_from_challenges + xp_from_seasons
     level = (total_xp // 100) + 1
     xp_in_level = total_xp % 100
 
@@ -165,6 +187,53 @@ async def get_user_stats(user_id: str):
         "insight": insight,
         "total_xp": total_xp,
     }
+
+
+@router.get("/{user_id}/achievements")
+async def get_user_achievements(user_id: str):
+    """Return list of user achievements (label, unlocked, unlocked_at)"""
+    if not supabase:
+        # Demo data
+        return [
+            {"label": "Primer hábito", "unlocked": True, "unlocked_at": None},
+            {"label": "Racha 7d", "unlocked": False, "unlocked_at": None},
+        ]
+
+    resp = supabase.table("user_achievements").select("label, unlocked, unlocked_at").eq("user_id", user_id).execute()
+    if resp.data:
+        return resp.data
+    return []
+
+
+@router.post("/{user_id}/achievements")
+async def report_user_achievement(user_id: str, achievement: dict = Body(...)):
+    """Insert or update an achievement record for the user."""
+    if not supabase:
+        return {"success": True}
+
+    label = achievement.get("label")
+    unlocked = achievement.get("unlocked", False)
+    unlocked_at = achievement.get("unlocked_at") or datetime.utcnow().isoformat() if unlocked else None
+
+    existing = supabase.table("user_achievements").select("id, unlocked").eq("user_id", user_id).eq("label", label).execute()
+    if existing.data:
+        # update
+        data = {"unlocked": unlocked, "updated_at": datetime.utcnow().isoformat()}
+        if unlocked and unlocked_at:
+            data["unlocked_at"] = unlocked_at
+        supabase.table("user_achievements").update(data).eq("id", existing.data[0]["id"]).execute()
+        return {"success": True}
+    else:
+        data = {
+            "user_id": user_id,
+            "label": label,
+            "unlocked": unlocked,
+            "unlocked_at": unlocked_at,
+            "created_at": datetime.utcnow().isoformat(),
+            "updated_at": datetime.utcnow().isoformat()
+        }
+        supabase.table("user_achievements").insert(data).execute()
+        return {"success": True}
 
 
 @router.get("/{user_id}/weekly-activity")
@@ -245,3 +314,30 @@ async def update_preferences(
         response = supabase.table("user_preferences").insert(data).execute()
     
     return response.data[0] if response.data else {"success": True}
+
+
+class FcmTokenRequest(BaseModel):
+    user_id: str
+    fcm_token: str
+    device_info: Optional[str] = None
+
+
+@router.post("/fcm-token")
+async def register_fcm_token(request: FcmTokenRequest):
+    if not supabase:
+        return {"success": True}
+
+    existing = supabase.table("user_fcm_tokens").select("id").eq("user_id", request.user_id).eq("fcm_token", request.fcm_token).execute()
+    if existing.data:
+        supabase.table("user_fcm_tokens").update({"updated_at": datetime.utcnow().isoformat()}).eq("id", existing.data[0]["id"]).execute()
+        return {"success": True}
+
+    data = {
+        "user_id": request.user_id,
+        "fcm_token": request.fcm_token,
+        "device_info": request.device_info,
+        "created_at": datetime.utcnow().isoformat(),
+        "updated_at": datetime.utcnow().isoformat(),
+    }
+    supabase.table("user_fcm_tokens").insert(data).execute()
+    return {"success": True}
