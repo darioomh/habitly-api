@@ -257,6 +257,10 @@ async def update_progress(challenge_id: str, request: UpdateProgressRequest):
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Database error: {str(e)}")
 
+@router.put("/{challenge_id}/progress")
+async def update_progress_put(challenge_id: str, request: UpdateProgressRequest):
+    return await update_progress(challenge_id, request)
+
 @router.get("/{challenge_id}/participants")
 async def get_participants(challenge_id: str):
     if not supabase:
@@ -266,5 +270,101 @@ async def get_participants(challenge_id: str):
     try:
         response = supabase.table("challenge_participants").select("*").eq("challenge_id", challenge_id).execute()
         return response.data if response.data else []
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Database error: {str(e)}")
+
+@router.get("/{challenge_id}/leaderboard")
+async def get_leaderboard(challenge_id: str):
+    if not supabase:
+        return []
+    if not is_valid_uuid(challenge_id):
+        raise HTTPException(status_code=400, detail="Invalid challenge ID format")
+    try:
+        response = (
+            supabase.table("challenge_participants")
+            .select("*")
+            .eq("challenge_id", challenge_id)
+            .order("total_points", desc=True)
+            .execute()
+        )
+        return response.data if response.data else []
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Database error: {str(e)}")
+
+@router.post("/{challenge_id}/invites")
+async def track_challenge_invite(challenge_id: str, payload: Dict[str, Any] = Body(...)):
+    if not supabase:
+        return {"challenge_id": challenge_id, "user_id": payload.get("user_id", ""), "invite_count": 1}
+    user_id = payload.get("user_id")
+    if not user_id or not is_valid_uuid(challenge_id) or not is_valid_uuid(user_id):
+        raise HTTPException(status_code=400, detail="Invalid ID format")
+    try:
+        existing = (
+            supabase.table("challenge_invites")
+            .select("*")
+            .eq("challenge_id", challenge_id)
+            .eq("user_id", user_id)
+            .execute()
+        )
+        if existing.data:
+            current = existing.data[0]
+            invite_count = int(current.get("invite_count") or 0) + 1
+            response = (
+                supabase.table("challenge_invites")
+                .update({"invite_count": invite_count, "updated_at": datetime.utcnow().isoformat()})
+                .eq("id", current["id"])
+                .execute()
+            )
+            return response.data[0] if response.data else {**current, "invite_count": invite_count}
+        data = {
+            "challenge_id": challenge_id,
+            "user_id": user_id,
+            "invite_count": 1,
+            "created_at": datetime.utcnow().isoformat(),
+            "updated_at": datetime.utcnow().isoformat(),
+        }
+        response = supabase.table("challenge_invites").insert(data).execute()
+        return response.data[0] if response.data else data
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Database error: {str(e)}")
+
+
+@router.post("/{challenge_id}/participants/{user_id}/add-points")
+async def add_points_to_participant(challenge_id: str, user_id: str, payload: Dict[str, int] = Body(...)):
+    """Add points to a challenge participant (increments total_points).
+    Body: { "points": 10 }
+    """
+    if not supabase:
+        # Demo response when DB not configured
+        points = int(payload.get("points") or 0)
+        return {"challenge_id": challenge_id, "user_id": user_id, "added": points, "total_points": points}
+
+    if not is_valid_uuid(challenge_id) or not is_valid_uuid(user_id):
+        raise HTTPException(status_code=400, detail="Invalid ID format")
+
+    try:
+        points = int(payload.get("points") or 0)
+    except Exception:
+        raise HTTPException(status_code=400, detail="Invalid points value")
+
+    if points <= 0:
+        raise HTTPException(status_code=400, detail="Points must be a positive integer")
+
+    try:
+        resp = supabase.table("challenge_participants").select("id,total_points").eq("challenge_id", challenge_id).eq("user_id", user_id).execute()
+        if not resp.data:
+            raise HTTPException(status_code=404, detail="Participant not found")
+
+        participant = resp.data[0]
+        current = int(participant.get("total_points") or 0)
+        new_total = current + points
+
+        update_resp = supabase.table("challenge_participants").update({"total_points": new_total, "updated_at": datetime.utcnow().isoformat()}).eq("id", participant["id"]).execute()
+        if update_resp.data:
+            return update_resp.data[0]
+        # Fallback
+        return {"challenge_id": challenge_id, "user_id": user_id, "total_points": new_total}
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Database error: {str(e)}")
