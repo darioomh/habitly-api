@@ -106,9 +106,75 @@ async def create_habit_log(
     if existing.data:
         response = supabase.table("habit_logs").update(data).eq("id", existing.data[0]["id"]).execute()
     else:
+        response = None
+
+    # Insert or update the habit log
+    if existing.data:
+        response = supabase.table("habit_logs").update(data).eq("id", existing.data[0]["id"]).execute()
+    else:
         response = supabase.table("habit_logs").insert(data).execute()
-    
-    return response.data[0] if response.data else data
+
+    result = response.data[0] if response.data else data
+
+    # If completed, award XP to linked challenge participants automatically
+    try:
+        if completed:
+            # Determine xp amount: xp_earned from log or habit.xp_value
+            xp_amount = int(result.get("xp_earned") or 0)
+            if xp_amount == 0:
+                try:
+                    habit_resp = supabase.table("habits").select("xp_value").eq("id", habit_id).execute()
+                    if habit_resp.data:
+                        xp_amount = int(habit_resp.data[0].get("xp_value") or 0)
+                except Exception:
+                    xp_amount = 0
+
+            if xp_amount > 0:
+                # Find challenge mappings for this habit
+                try:
+                    mappings = supabase.table("challenge_habits").select("challenge_id").eq("habit_id", habit_id).execute()
+                    mappings = mappings.data if mappings.data else []
+                except Exception:
+                    mappings = []
+
+                for m in mappings:
+                    challenge_id = m.get("challenge_id")
+                    if not challenge_id:
+                        continue
+                    # Ensure participant exists; if not, create participant (auto-join)
+                    try:
+                        part_resp = supabase.table("challenge_participants").select("id,total_points,user_name").eq("challenge_id", challenge_id).eq("user_id", user_id).execute()
+                        if part_resp.data:
+                            participant = part_resp.data[0]
+                            current = int(participant.get("total_points") or 0)
+                            new_total = current + xp_amount
+                            supabase.table("challenge_participants").update({"total_points": new_total, "updated_at": datetime.utcnow().isoformat()}).eq("id", participant["id"]).execute()
+                        else:
+                            # Fetch user name if possible
+                            try:
+                                user_resp = supabase.table("users").select("display_name").eq("id", user_id).execute()
+                                user_name = user_resp.data[0].get("display_name") if user_resp.data else None
+                            except Exception:
+                                user_name = None
+                            new_part = {
+                                "challenge_id": challenge_id,
+                                "user_id": user_id,
+                                "user_name": user_name,
+                                "joined_at": datetime.utcnow().isoformat(),
+                                "progress": 0,
+                                "current_streak": 0,
+                                "best_streak": 0,
+                                "total_points": xp_amount
+                            }
+                            supabase.table("challenge_participants").insert(new_part).execute()
+                    except Exception:
+                        # ignore per-participant errors to not block habit logging
+                        pass
+    except Exception:
+        # Fail silently: habit log should still be returned even if awarding points fails
+        pass
+
+    return result
 
 @router.get("/logs/{habit_id}")
 async def get_habit_logs(habit_id: str):

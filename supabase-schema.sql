@@ -125,6 +125,79 @@ CREATE TABLE IF NOT EXISTS challenge_winners (
     created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
 );
 
+-- Mapping table: link habits to challenges so completing a habit can award challenge points
+CREATE TABLE IF NOT EXISTS challenge_habits (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    challenge_id UUID REFERENCES challenges(id) ON DELETE CASCADE,
+    habit_id UUID REFERENCES habits(id) ON DELETE CASCADE,
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+    UNIQUE(challenge_id, habit_id)
+);
+
+-- Squads table
+CREATE TABLE IF NOT EXISTS squads (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    name TEXT NOT NULL,
+    description TEXT,
+    created_by UUID REFERENCES users(id) ON DELETE CASCADE,
+    invite_code TEXT UNIQUE NOT NULL,
+    max_members INTEGER DEFAULT 10,
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+);
+
+-- Squad Members table
+CREATE TABLE IF NOT EXISTS squad_members (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    squad_id UUID REFERENCES squads(id) ON DELETE CASCADE,
+    user_id UUID REFERENCES users(id) ON DELETE CASCADE,
+    user_name TEXT,
+    role TEXT DEFAULT 'member',
+    joined_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+    UNIQUE(squad_id, user_id)
+);
+
+-- Expeditions table
+CREATE TABLE IF NOT EXISTS expeditions (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    user_id UUID REFERENCES users(id) ON DELETE CASCADE,
+    stages JSONB NOT NULL DEFAULT '[]',
+    current_stage INTEGER DEFAULT 0,
+    started_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+    completed BOOLEAN DEFAULT false,
+    completed_at TIMESTAMP WITH TIME ZONE
+);
+
+-- Seasons table
+CREATE TABLE IF NOT EXISTS seasons (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    name TEXT NOT NULL,
+    label TEXT UNIQUE NOT NULL,
+    start_date TIMESTAMP WITH TIME ZONE NOT NULL,
+    end_date TIMESTAMP WITH TIME ZONE NOT NULL,
+    is_active BOOLEAN DEFAULT true,
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+);
+
+-- Season Participants table
+CREATE TABLE IF NOT EXISTS season_participants (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    season_id UUID REFERENCES seasons(id) ON DELETE CASCADE,
+    user_id UUID REFERENCES users(id) ON DELETE CASCADE,
+    total_points INTEGER DEFAULT 0,
+    joined_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+    UNIQUE(season_id, user_id)
+);
+
+-- User FCM Tokens table
+CREATE TABLE IF NOT EXISTS user_fcm_tokens (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    user_id UUID REFERENCES users(id) ON DELETE CASCADE,
+    fcm_token TEXT NOT NULL,
+    device_info TEXT,
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+    updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+);
+
 -- Create indexes for better performance
 CREATE INDEX IF NOT EXISTS idx_habits_user_id ON habits(user_id);
 CREATE INDEX IF NOT EXISTS idx_habit_logs_habit_id ON habit_logs(habit_id);
@@ -147,6 +220,12 @@ ALTER TABLE articles ENABLE ROW LEVEL SECURITY;
 ALTER TABLE saved_articles ENABLE ROW LEVEL SECURITY;
 ALTER TABLE challenges ENABLE ROW LEVEL SECURITY;
 ALTER TABLE challenge_participants ENABLE ROW LEVEL SECURITY;
+ALTER TABLE squads ENABLE ROW LEVEL SECURITY;
+ALTER TABLE squad_members ENABLE ROW LEVEL SECURITY;
+ALTER TABLE expeditions ENABLE ROW LEVEL SECURITY;
+ALTER TABLE seasons ENABLE ROW LEVEL SECURITY;
+ALTER TABLE season_participants ENABLE ROW LEVEL SECURITY;
+ALTER TABLE user_fcm_tokens ENABLE ROW LEVEL SECURITY;
 
 -- RLS Policies (allow all for demo - customize for production)
 CREATE POLICY "Allow all access to users" ON users FOR ALL USING (true) WITH CHECK (true);
@@ -157,3 +236,9 @@ CREATE POLICY "Allow all access to articles" ON articles FOR ALL USING (true) WI
 CREATE POLICY "Allow all access to saved_articles" ON saved_articles FOR ALL USING (true) WITH CHECK (true);
 CREATE POLICY "Allow all access to challenges" ON challenges FOR ALL USING (true) WITH CHECK (true);
 CREATE POLICY "Allow all access to challenge_participants" ON challenge_participants FOR ALL USING (true) WITH CHECK (true);
+CREATE POLICY "Allow all access to squads" ON squads FOR ALL USING (true) WITH CHECK (true);
+CREATE POLICY "Allow all access to squad_members" ON squad_members FOR ALL USING (true) WITH CHECK (true);
+CREATE POLICY "Allow all access to expeditions" ON expeditions FOR ALL USING (true) WITH CHECK (true);
+CREATE POLICY "Allow all access to seasons" ON seasons FOR ALL USING (true) WITH CHECK (true);
+CREATE POLICY "Allow all access to season_participants" ON season_participants FOR ALL USING (true) WITH CHECK (true);
+CREATE POLICY "Allow all access to user_fcm_tokens" ON user_fcm_tokens FOR ALL USING (true) WITH CHECK (true);
