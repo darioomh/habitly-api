@@ -1,16 +1,17 @@
-from fastapi import APIRouter, HTTPException, Query, Body
+from fastapi import APIRouter, HTTPException, Query, Body, BackgroundTasks
 from typing import List, Optional, Dict, Any
 from datetime import datetime
 import os
 import httpx
+import asyncio
 from app.database import supabase
 from app.models.models import Habit, HabitCreate
 
 router = APIRouter()
 
 
-def send_fcm_notification(tokens: List[str], title: str, body: str, data: Dict[str, Any] | None = None) -> bool:
-    """Send push notification via FCM legacy API if FCM_SERVER_KEY is set.
+async def send_fcm_notification_async(tokens: List[str], title: str, body: str, data: Dict[str, Any] | None = None) -> bool:
+    """Send push notification via FCM legacy API (async) if FCM_SERVER_KEY is set.
     Returns True on 200 response, False otherwise or if disabled.
     """
     key = os.getenv("FCM_SERVER_KEY")
@@ -19,8 +20,9 @@ def send_fcm_notification(tokens: List[str], title: str, body: str, data: Dict[s
     headers = {"Authorization": f"key={key}", "Content-Type": "application/json"}
     payload = {"registration_ids": tokens, "notification": {"title": title, "body": body}, "data": data or {}}
     try:
-        resp = httpx.post("https://fcm.googleapis.com/fcm/send", json=payload, headers=headers, timeout=5.0)
-        return resp.status_code == 200
+        async with httpx.AsyncClient() as client:
+            resp = await client.post("https://fcm.googleapis.com/fcm/send", json=payload, headers=headers, timeout=5.0)
+            return resp.status_code == 200
     except Exception:
         return False
 
@@ -102,7 +104,8 @@ async def create_habit_log(
     user_id: str,
     date: str,
     completed: bool = False,
-    notes: Optional[str] = None
+    notes: Optional[str] = None,
+    background_tasks: BackgroundTasks | None = None
 ):
     """Log habit completion"""
     if not supabase:
@@ -222,7 +225,18 @@ async def create_habit_log(
                                 title = f"Ganaste {xp_amount} XP"
                                 body = f"Has recibido {xp_amount} XP por completar un hábito en {ch_title}."
                                 try:
-                                    send_fcm_notification(tokens, title, body, {"challenge_id": challenge_id, "points": xp_amount})
+                                    if background_tasks:
+                                        background_tasks.add_task(send_fcm_notification_async, tokens, title, body, {"challenge_id": challenge_id, "points": xp_amount})
+                                    else:
+                                        # schedule in event loop if available
+                                        try:
+                                            asyncio.create_task(send_fcm_notification_async(tokens, title, body, {"challenge_id": challenge_id, "points": xp_amount}))
+                                        except Exception:
+                                            # last resort: call sync wrapper
+                                            try:
+                                                httpx.post("https://fcm.googleapis.com/fcm/send", json={"registration_ids": tokens, "notification": {"title": title, "body": body}, "data": {"challenge_id": challenge_id, "points": xp_amount}}, headers={"Authorization": f"key={os.getenv('FCM_SERVER_KEY')}", "Content-Type": "application/json"}, timeout=5.0)
+                                            except Exception:
+                                                pass
                                 except Exception:
                                     pass
                         except Exception:

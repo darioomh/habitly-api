@@ -329,6 +329,31 @@ async def track_challenge_invite(challenge_id: str, payload: Dict[str, Any] = Bo
         raise HTTPException(status_code=500, detail=f"Database error: {str(e)}")
 
 
+@router.get("/points-log")
+async def get_challenge_points_log(
+    challenge_id: Optional[str] = Query(None),
+    user_id: Optional[str] = Query(None),
+    page: int = Query(1, ge=1),
+    per_page: int = Query(50, ge=1, le=200)
+):
+    """Get paginated challenge points log. Filters by challenge_id and/or user_id."""
+    if not supabase:
+        return {"items": [], "total": 0, "page": page, "per_page": per_page}
+    try:
+        resp = supabase.table("challenge_points_log").select("*").order("created_at", desc=True).execute()
+        items = resp.data if resp.data else []
+        if challenge_id:
+            items = [i for i in items if i.get("challenge_id") == challenge_id]
+        if user_id:
+            items = [i for i in items if i.get("user_id") == user_id]
+        total = len(items)
+        start = (page - 1) * per_page
+        end = start + per_page
+        return {"items": items[start:end], "total": total, "page": page, "per_page": per_page}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Database error: {str(e)}")
+
+
 @router.post("/{challenge_id}/participants/{user_id}/add-points")
 async def add_points_to_participant(challenge_id: str, user_id: str, payload: Dict[str, int] = Body(...)):
     """Add points to a challenge participant (increments total_points).
