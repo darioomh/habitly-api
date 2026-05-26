@@ -134,6 +134,17 @@ CREATE TABLE IF NOT EXISTS challenge_habits (
     UNIQUE(challenge_id, habit_id)
 );
 
+-- Challenge points log: audit of points awarded to users for challenges
+CREATE TABLE IF NOT EXISTS challenge_points_log (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    challenge_id UUID REFERENCES challenges(id) ON DELETE CASCADE,
+    user_id UUID REFERENCES users(id) ON DELETE CASCADE,
+    habit_id UUID REFERENCES habits(id),
+    points INTEGER NOT NULL,
+    reason TEXT,
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+);
+
 -- Squads table
 CREATE TABLE IF NOT EXISTS squads (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),

@@ -1,10 +1,28 @@
-from fastapi import APIRouter, HTTPException, Query
-from typing import List, Optional
+from fastapi import APIRouter, HTTPException, Query, Body
+from typing import List, Optional, Dict, Any
 from datetime import datetime
+import os
+import httpx
 from app.database import supabase
 from app.models.models import Habit, HabitCreate
 
 router = APIRouter()
+
+
+def send_fcm_notification(tokens: List[str], title: str, body: str, data: Dict[str, Any] | None = None) -> bool:
+    """Send push notification via FCM legacy API if FCM_SERVER_KEY is set.
+    Returns True on 200 response, False otherwise or if disabled.
+    """
+    key = os.getenv("FCM_SERVER_KEY")
+    if not key or not tokens:
+        return False
+    headers = {"Authorization": f"key={key}", "Content-Type": "application/json"}
+    payload = {"registration_ids": tokens, "notification": {"title": title, "body": body}, "data": data or {}}
+    try:
+        resp = httpx.post("https://fcm.googleapis.com/fcm/send", json=payload, headers=headers, timeout=5.0)
+        return resp.status_code == 200
+    except Exception:
+        return False
 
 @router.get("")
 async def get_habits(
@@ -144,11 +162,13 @@ async def create_habit_log(
                     # Ensure participant exists; if not, create participant (auto-join)
                     try:
                         part_resp = supabase.table("challenge_participants").select("id,total_points,user_name").eq("challenge_id", challenge_id).eq("user_id", user_id).execute()
+                        participant_id = None
                         if part_resp.data:
                             participant = part_resp.data[0]
                             current = int(participant.get("total_points") or 0)
                             new_total = current + xp_amount
                             supabase.table("challenge_participants").update({"total_points": new_total, "updated_at": datetime.utcnow().isoformat()}).eq("id", participant["id"]).execute()
+                            participant_id = participant.get("id")
                         else:
                             # Fetch user name if possible
                             try:
@@ -166,7 +186,48 @@ async def create_habit_log(
                                 "best_streak": 0,
                                 "total_points": xp_amount
                             }
-                            supabase.table("challenge_participants").insert(new_part).execute()
+                            insert_resp = supabase.table("challenge_participants").insert(new_part).execute()
+                            if insert_resp.data:
+                                participant_id = insert_resp.data[0].get("id")
+                            new_total = xp_amount
+
+                        # Log the points awarded
+                        try:
+                            log_entry = {
+                                "challenge_id": challenge_id,
+                                "user_id": user_id,
+                                "habit_id": habit_id,
+                                "points": xp_amount,
+                                "reason": f"habit_log:{result.get('id') or ''}",
+                                "created_at": datetime.utcnow().isoformat()
+                            }
+                            supabase.table("challenge_points_log").insert(log_entry).execute()
+                        except Exception:
+                            pass
+
+                        # Notify the user via FCM tokens (if configured)
+                        try:
+                            ch_title = "Desafío"
+                            try:
+                                ch_resp = supabase.table("challenges").select("title").eq("id", challenge_id).execute()
+                                if ch_resp.data:
+                                    ch_title = ch_resp.data[0].get("title") or ch_title
+                            except Exception:
+                                pass
+
+                            tokens_resp = supabase.table("user_fcm_tokens").select("fcm_token").eq("user_id", user_id).execute()
+                            tokens = [r.get("fcm_token") for r in (tokens_resp.data or [])]
+
+                            if tokens:
+                                title = f"Ganaste {xp_amount} XP"
+                                body = f"Has recibido {xp_amount} XP por completar un hábito en {ch_title}."
+                                try:
+                                    send_fcm_notification(tokens, title, body, {"challenge_id": challenge_id, "points": xp_amount})
+                                except Exception:
+                                    pass
+                        except Exception:
+                            pass
+
                     except Exception:
                         # ignore per-participant errors to not block habit logging
                         pass
