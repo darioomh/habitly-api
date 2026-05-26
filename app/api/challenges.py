@@ -1,5 +1,6 @@
 from fastapi import APIRouter, HTTPException, Query, Body
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, date
+import calendar
 from typing import Optional, List, Dict, Any
 from pydantic import BaseModel
 import uuid
@@ -329,6 +330,106 @@ async def auto_link_habits(category: Optional[str] = None):
                 details.append({"challenge_id": ch["id"], "habit_id": h["id"], "challenge_title": ch.get("title")})
 
         return {"linked": linked, "details": details}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Database error: {str(e)}")
+
+
+@router.post("/reset-monthly")
+async def reset_monthly_challenges(year: Optional[int] = None, month: Optional[int] = None, create_premium: bool = True):
+    """Delete existing challenges and create one monthly challenge per category. Also create an optional premium challenge for the month."""
+    if not supabase:
+        return {"created": 0, "note": "Supabase not configured"}
+    try:
+        today = datetime.utcnow().date()
+        if not year:
+            year = today.year
+        if not month:
+            month = today.month
+        # compute start and end of month
+        start_date = datetime(year, month, 1).isoformat()
+        last_day = calendar.monthrange(year, month)[1]
+        end_date = datetime(year, month, last_day, 23, 59, 59).isoformat()
+
+        # Delete existing challenges and mappings
+        try:
+            supabase.table("challenge_habits").delete().execute()
+        except Exception:
+            pass
+        try:
+            supabase.table("challenge_participants").delete().execute()
+        except Exception:
+            pass
+        try:
+            supabase.table("challenges").delete().execute()
+        except Exception:
+            pass
+
+        # Discover categories from habits
+        cats_resp = supabase.table("habits").select("category").execute()
+        cats = [ (r.get("category") or "").strip().upper() for r in (cats_resp.data or []) ]
+        cats = sorted(set([c for c in cats if c]))
+        if not cats:
+            # fallback categories
+            cats = ["SALUD", "PRODUCTIVIDAD", "EJERCICIO", "MINDFULNESS", "SOCIAL"]
+
+        created = 0
+        created_details = []
+        for cat in cats:
+            title = f"{cat} - {month:02d}/{year}"
+            challenge = {
+                "title": title,
+                "description": f"Desafío mensual de {cat} para {month:02d}/{year}",
+                "category": cat,
+                "difficulty": "medium",
+                "duration_days": last_day,
+                "max_participants": 10000,
+                "reward": "Badge",
+                "is_premium_required": False,
+                "is_public": True,
+                "is_live": True,
+                "is_active": True,
+                "start_date": start_date,
+                "end_date": end_date,
+                "created_at": datetime.utcnow().isoformat()
+            }
+            resp = supabase.table("challenges").insert(challenge).execute()
+            if resp.data:
+                ch = resp.data[0]
+                created += 1
+                created_details.append(ch)
+                # auto-link habits of same category
+                try:
+                    habits_resp = supabase.table("habits").select("id").eq("category", cat).execute()
+                    habits = habits_resp.data if habits_resp.data else []
+                    for h in habits:
+                        supabase.table("challenge_habits").insert({"challenge_id": ch.get("id"), "habit_id": h.get("id"), "created_at": datetime.utcnow().isoformat()}).execute()
+                except Exception:
+                    pass
+
+        if create_premium:
+            title = f"PREMIUM - {month:02d}/{year}"
+            premium = {
+                "title": title,
+                "description": "Desafío exclusivo para suscriptores Premium",
+                "category": "PREMIUM",
+                "difficulty": "hard",
+                "duration_days": last_day,
+                "max_participants": 10000,
+                "reward": "Premium Badge",
+                "is_premium_required": True,
+                "is_public": True,
+                "is_live": True,
+                "is_active": True,
+                "start_date": start_date,
+                "end_date": end_date,
+                "created_at": datetime.utcnow().isoformat()
+            }
+            p_resp = supabase.table("challenges").insert(premium).execute()
+            if p_resp.data:
+                created_details.append(p_resp.data[0])
+                created += 1
+
+        return {"created": created, "details": created_details}
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Database error: {str(e)}")
 

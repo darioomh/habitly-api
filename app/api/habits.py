@@ -105,7 +105,7 @@ async def create_habit_log(
     date: str,
     completed: bool = False,
     notes: Optional[str] = None,
-    background_tasks: BackgroundTasks | None = None
+    background_tasks: BackgroundTasks = None
 ):
     """Log habit completion"""
     if not supabase:
@@ -137,9 +137,17 @@ async def create_habit_log(
 
     result = response.data[0] if response.data else data
 
-    # If completed, award XP to linked challenge participants automatically
+    # Only award points when the log is newly created or changes from not-completed -> completed
+    prev_completed = False
+    was_new = False
+    if existing.data:
+        prev_completed = bool(existing.data[0].get("completed"))
+    else:
+        was_new = True
+
+    # If completed is True and either new log or previously not completed, then award
     try:
-        if completed:
+        if completed and (was_new or (existing.data and not prev_completed)):
             # Determine xp amount: xp_earned from log or habit.xp_value
             xp_amount = int(result.get("xp_earned") or 0)
             if xp_amount == 0:
@@ -162,6 +170,17 @@ async def create_habit_log(
                     challenge_id = m.get("challenge_id")
                     if not challenge_id:
                         continue
+
+                    # Avoid double-logging: skip if there is already a challenge_points_log for this habit_log
+                    habit_log_id = result.get("id")
+                    try:
+                        if habit_log_id:
+                            existing_log_check = supabase.table("challenge_points_log").select("id").eq("reason", f"habit_log:{habit_log_id}").execute()
+                            if existing_log_check.data:
+                                continue
+                    except Exception:
+                        pass
+
                     # Ensure participant exists; if not, create participant (auto-join)
                     try:
                         part_resp = supabase.table("challenge_participants").select("id,total_points,user_name").eq("challenge_id", challenge_id).eq("user_id", user_id).execute()
@@ -201,7 +220,7 @@ async def create_habit_log(
                                 "user_id": user_id,
                                 "habit_id": habit_id,
                                 "points": xp_amount,
-                                "reason": f"habit_log:{result.get('id') or ''}",
+                                "reason": f"habit_log:{habit_log_id or ''}",
                                 "created_at": datetime.utcnow().isoformat()
                             }
                             supabase.table("challenge_points_log").insert(log_entry).execute()
