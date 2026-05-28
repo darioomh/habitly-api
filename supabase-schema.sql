@@ -144,7 +144,6 @@ CREATE TABLE IF NOT EXISTS challenge_points_log (
     reason TEXT,
     created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
 );
-
 -- Squads table
 CREATE TABLE IF NOT EXISTS squads (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),

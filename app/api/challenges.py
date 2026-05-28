@@ -295,16 +295,11 @@ async def get_leaderboard(challenge_id: str):
 
 @router.post("/auto-link-habits")
 async def auto_link_habits(category: Optional[str] = None):
-    """Auto-link habits to challenges by matching category (case-insensitive).
-    If category is provided, only process that category.
-    """
     if not supabase:
         return {"linked": 0, "details": [], "note": "Supabase not configured"}
     try:
-        # fetch active challenges
         ch_resp = supabase.table("challenges").select("id,category,title,is_active").execute()
         challenges = ch_resp.data if ch_resp.data else []
-        # fetch habits
         habits_resp = supabase.table("habits").select("id,category").execute()
         habits = habits_resp.data if habits_resp.data else []
 
@@ -320,11 +315,9 @@ async def auto_link_habits(category: Optional[str] = None):
                 h_cat = (h.get("category") or "").strip().upper()
                 if not h_cat or h_cat != ch_cat:
                     continue
-                # check existing mapping
                 exists = supabase.table("challenge_habits").select("id").eq("challenge_id", ch["id"]).eq("habit_id", h["id"]).execute()
                 if exists.data:
                     continue
-                # insert mapping
                 supabase.table("challenge_habits").insert({"challenge_id": ch["id"], "habit_id": h["id"], "created_at": datetime.utcnow().isoformat()}).execute()
                 linked += 1
                 details.append({"challenge_id": ch["id"], "habit_id": h["id"], "challenge_title": ch.get("title")})
@@ -336,7 +329,6 @@ async def auto_link_habits(category: Optional[str] = None):
 
 @router.post("/reset-monthly")
 async def reset_monthly_challenges(year: Optional[int] = None, month: Optional[int] = None, create_premium: bool = True):
-    """Delete existing challenges and create one monthly challenge per category. Also create an optional premium challenge for the month."""
     if not supabase:
         return {"created": 0, "note": "Supabase not configured"}
     try:
@@ -345,12 +337,10 @@ async def reset_monthly_challenges(year: Optional[int] = None, month: Optional[i
             year = today.year
         if not month:
             month = today.month
-        # compute start and end of month
         start_date = datetime(year, month, 1).isoformat()
         last_day = calendar.monthrange(year, month)[1]
         end_date = datetime(year, month, last_day, 23, 59, 59).isoformat()
 
-        # Delete existing challenges and mappings
         try:
             supabase.table("challenge_habits").delete().execute()
         except Exception:
@@ -364,12 +354,10 @@ async def reset_monthly_challenges(year: Optional[int] = None, month: Optional[i
         except Exception:
             pass
 
-        # Discover categories from habits
         cats_resp = supabase.table("habits").select("category").execute()
         cats = [ (r.get("category") or "").strip().upper() for r in (cats_resp.data or []) ]
         cats = sorted(set([c for c in cats if c]))
         if not cats:
-            # fallback categories
             cats = ["SALUD", "PRODUCTIVIDAD", "EJERCICIO", "MINDFULNESS", "SOCIAL"]
 
         created = 0
@@ -397,7 +385,6 @@ async def reset_monthly_challenges(year: Optional[int] = None, month: Optional[i
                 ch = resp.data[0]
                 created += 1
                 created_details.append(ch)
-                # auto-link habits of same category
                 try:
                     habits_resp = supabase.table("habits").select("id").eq("category", cat).execute()
                     habits = habits_resp.data if habits_resp.data else []
@@ -471,7 +458,6 @@ async def track_challenge_invite(challenge_id: str, payload: Dict[str, Any] = Bo
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Database error: {str(e)}")
 
-
 @router.get("/points-log/list")
 async def get_challenge_points_log(
     challenge_id: Optional[str] = Query(None),
@@ -479,7 +465,6 @@ async def get_challenge_points_log(
     page: int = Query(1, ge=1),
     per_page: int = Query(50, ge=1, le=200)
 ):
-    """Get paginated challenge points log. Filters by challenge_id and/or user_id."""
     if not supabase:
         return {"items": [], "total": 0, "page": page, "per_page": per_page}
     try:
@@ -499,11 +484,7 @@ async def get_challenge_points_log(
 
 @router.post("/{challenge_id}/participants/{user_id}/add-points")
 async def add_points_to_participant(challenge_id: str, user_id: str, payload: Dict[str, int] = Body(...)):
-    """Add points to a challenge participant (increments total_points).
-    Body: { "points": 10 }
-    """
     if not supabase:
-        # Demo response when DB not configured
         points = int(payload.get("points") or 0)
         return {"challenge_id": challenge_id, "user_id": user_id, "added": points, "total_points": points}
 
@@ -530,7 +511,6 @@ async def add_points_to_participant(challenge_id: str, user_id: str, payload: Di
         update_resp = supabase.table("challenge_participants").update({"total_points": new_total, "updated_at": datetime.utcnow().isoformat()}).eq("id", participant["id"]).execute()
         if update_resp.data:
             return update_resp.data[0]
-        # Fallback
         return {"challenge_id": challenge_id, "user_id": user_id, "total_points": new_total}
     except HTTPException:
         raise
