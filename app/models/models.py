@@ -85,3 +85,22 @@ class UserPreference(UserPreferenceBase):
     id: str
     user_id: str
     updated_at: datetime
+
+# Journal models
+class JournalEntryBase(BaseModel):
+    user_id: str
+    date: str
+    mood: str
+    note: Optional[str] = None
+    habit_reflections: Optional[List[dict]] = None
+
+class JournalEntryCreate(JournalEntryBase):
+    pass
+
+class JournalEntry(JournalEntryBase):
+    id: str
+    created_at: datetime
+    updated_at: datetime
+
+class JournalListResponse(BaseModel):
+    entries: List[JournalEntry]

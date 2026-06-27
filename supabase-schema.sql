@@ -221,6 +221,22 @@ CREATE INDEX IF NOT EXISTS idx_challenge_participants_challenge ON challenge_par
 CREATE INDEX IF NOT EXISTS idx_challenge_participants_user ON challenge_participants(user_id);
 CREATE INDEX IF NOT EXISTS idx_challenge_winners_challenge ON challenge_winners(challenge_id);
 
+-- Journal Entries table
+CREATE TABLE IF NOT EXISTS journal_entries (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    user_id UUID REFERENCES users(id) ON DELETE CASCADE,
+    date DATE NOT NULL,
+    mood TEXT NOT NULL,
+    note TEXT,
+    habit_reflections JSONB DEFAULT '[]',
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+    updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+    UNIQUE(user_id, date)
+);
+
+CREATE INDEX IF NOT EXISTS idx_journal_entries_user_id ON journal_entries(user_id);
+CREATE INDEX IF NOT EXISTS idx_journal_entries_date ON journal_entries(date);
+
 -- Enable Row Level Security (RLS)
 ALTER TABLE users ENABLE ROW LEVEL SECURITY;
 ALTER TABLE user_preferences ENABLE ROW LEVEL SECURITY;
@@ -236,6 +252,7 @@ ALTER TABLE expeditions ENABLE ROW LEVEL SECURITY;
 ALTER TABLE seasons ENABLE ROW LEVEL SECURITY;
 ALTER TABLE season_participants ENABLE ROW LEVEL SECURITY;
 ALTER TABLE user_fcm_tokens ENABLE ROW LEVEL SECURITY;
+ALTER TABLE journal_entries ENABLE ROW LEVEL SECURITY;
 
 -- RLS Policies (allow all for demo - customize for production)
 CREATE POLICY "Allow all access to users" ON users FOR ALL USING (true) WITH CHECK (true);
@@ -252,3 +269,4 @@ CREATE POLICY "Allow all access to expeditions" ON expeditions FOR ALL USING (tr
 CREATE POLICY "Allow all access to seasons" ON seasons FOR ALL USING (true) WITH CHECK (true);
 CREATE POLICY "Allow all access to season_participants" ON season_participants FOR ALL USING (true) WITH CHECK (true);
 CREATE POLICY "Allow all access to user_fcm_tokens" ON user_fcm_tokens FOR ALL USING (true) WITH CHECK (true);
+CREATE POLICY "Allow all access to journal_entries" ON journal_entries FOR ALL USING (true) WITH CHECK (true);
