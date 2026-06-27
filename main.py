@@ -6,8 +6,9 @@ from app.api import habits, users, articles, settings, challenges, auth, squads,
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    """Run seed on startup."""
+    """Run seeds and migrations on startup."""
     challenges.seed_challenges_on_startup()
+    journal.migrate_journal_table()
     yield
 
 

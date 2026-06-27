@@ -1,10 +1,54 @@
 from fastapi import APIRouter, HTTPException, Query
 from typing import List, Optional
 from datetime import datetime, timezone
+import os
+import httpx
 from app.database import supabase
 from app.models.models import JournalEntry, JournalEntryCreate, JournalListResponse
 
 router = APIRouter()
+
+MIGRATION_SQL = """
+CREATE TABLE IF NOT EXISTS journal_entries (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    user_id UUID REFERENCES users(id) ON DELETE CASCADE,
+    date DATE NOT NULL,
+    mood TEXT NOT NULL,
+    note TEXT,
+    habit_reflections JSONB DEFAULT '[]',
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+    updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+    UNIQUE(user_id, date)
+);
+CREATE INDEX IF NOT EXISTS idx_journal_entries_user_id ON journal_entries(user_id);
+CREATE INDEX IF NOT EXISTS idx_journal_entries_date ON journal_entries(date);
+"""
+
+
+def migrate_journal_table():
+    """Create journal_entries table if it doesn't exist, on startup."""
+    url = os.environ.get("SUPABASE_URL", "")
+    key = os.environ.get("SUPABASE_KEY", "")
+    if not url or not key:
+        print("WARNING: Supabase not configured, skipping journal migration.")
+        return
+    try:
+        r = httpx.post(
+            f"{url}/sql",
+            json={"query": MIGRATION_SQL},
+            headers={
+                "apikey": key,
+                "Authorization": f"Bearer {key}",
+                "Content-Type": "application/json",
+            },
+            timeout=15,
+        )
+        if r.status_code == 200:
+            print("Journal table ready.")
+        else:
+            print(f"Journal migration warning ({r.status_code}): {r.text[:200]}")
+    except Exception as e:
+        print(f"Journal migration error: {e}")
 
 @router.get("")
 async def get_journal_entry(user_id: str = Query(...), date: str = Query(...)):
