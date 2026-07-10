@@ -8,7 +8,7 @@ from app.models.models import JournalEntry, JournalEntryCreate, JournalListRespo
 
 router = APIRouter()
 
-MIGRATION_SQL = """
+CREATE_TABLE_SQL = """
 CREATE TABLE IF NOT EXISTS journal_entries (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     user_id UUID REFERENCES users(id) ON DELETE CASCADE,
@@ -25,18 +25,22 @@ CREATE INDEX IF NOT EXISTS idx_journal_entries_user_id ON journal_entries(user_i
 CREATE INDEX IF NOT EXISTS idx_journal_entries_date ON journal_entries(date);
 """
 
+ADD_NOTES_COLUMN_SQL = "ALTER TABLE journal_entries ADD COLUMN IF NOT EXISTS notes JSONB DEFAULT '[]';"
 
-def migrate_journal_table():
-    """Create journal_entries table if it doesn't exist, on startup."""
-    url = os.environ.get("SUPABASE_URL", "")
-    key = os.environ.get("SUPABASE_KEY", "")
-    if not url or not key:
-        print("WARNING: Supabase not configured, skipping journal migration.")
-        return
+BACKFILL_NOTES_SQL = """
+UPDATE journal_entries SET notes = CASE
+    WHEN note IS NOT NULL AND note != '' THEN
+        jsonb_build_array(jsonb_build_object('text', note, 'created_at', COALESCE(updated_at, created_at)))
+    ELSE '[]'::jsonb
+END WHERE notes IS NULL OR notes = '[]'::jsonb;
+"""
+
+
+def _run_sql(sql: str, url: str, key: str, label: str):
     try:
         r = httpx.post(
             f"{url}/sql",
-            json={"query": MIGRATION_SQL},
+            json={"query": sql},
             headers={
                 "apikey": key,
                 "Authorization": f"Bearer {key}",
@@ -45,11 +49,23 @@ def migrate_journal_table():
             timeout=15,
         )
         if r.status_code == 200:
-            print("Journal table ready.")
+            print(f"{label}: OK")
         else:
-            print(f"Journal migration warning ({r.status_code}): {r.text[:200]}")
+            print(f"{label} warning ({r.status_code}): {r.text[:200]}")
     except Exception as e:
-        print(f"Journal migration error: {e}")
+        print(f"{label} error: {e}")
+
+
+def migrate_journal_table():
+    """Ensure journal_entries table has all columns, on startup."""
+    url = os.environ.get("SUPABASE_URL", "")
+    key = os.environ.get("SUPABASE_KEY", "")
+    if not url or not key:
+        print("WARNING: Supabase not configured, skipping journal migration.")
+        return
+    _run_sql(CREATE_TABLE_SQL, url, key, "Journal table")
+    _run_sql(ADD_NOTES_COLUMN_SQL, url, key, "Add notes column")
+    _run_sql(BACKFILL_NOTES_SQL, url, key, "Backfill notes")
 
 @router.get("")
 async def get_journal_entry(user_id: str = Query(...), date: str = Query(...)):
