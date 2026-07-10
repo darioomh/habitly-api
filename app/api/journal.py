@@ -16,6 +16,7 @@ CREATE TABLE IF NOT EXISTS journal_entries (
     mood TEXT NOT NULL,
     note TEXT,
     habit_reflections JSONB DEFAULT '[]',
+    notes JSONB DEFAULT '[]',
     created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
     updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
     UNIQUE(user_id, date)
@@ -54,11 +55,11 @@ def migrate_journal_table():
 async def get_journal_entry(user_id: str = Query(...), date: str = Query(...)):
     """Get journal entry for a specific date"""
     if not supabase:
-        return {"id": None, "user_id": user_id, "date": date, "mood": "", "note": None, "habit_reflections": None}
+        return {"id": None, "user_id": user_id, "date": date, "mood": "", "note": None, "habit_reflections": None, "notes": []}
     try:
         response = supabase.table("journal_entries").select("*").eq("user_id", user_id).eq("date", date).execute()
         if not response.data:
-            return {"id": None, "user_id": user_id, "date": date, "mood": "", "note": None, "habit_reflections": None}
+            return {"id": None, "user_id": user_id, "date": date, "mood": "", "note": None, "habit_reflections": None, "notes": []}
         return response.data[0]
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
@@ -84,7 +85,7 @@ async def get_journal_entries(user_id: str = Query(...), from_date: str = Query(
 
 @router.post("")
 async def save_journal_entry(entry: JournalEntryCreate):
-    """Create or update a journal entry"""
+    """Create or update a journal entry. Appends note to notes array instead of replacing."""
     if not supabase:
         raise HTTPException(status_code=500, detail="Supabase not configured")
 
@@ -92,12 +93,32 @@ async def save_journal_entry(entry: JournalEntryCreate):
     data = entry.model_dump(exclude_none=True)
     data["updated_at"] = now
 
+    # Build the new note entry to append
+    new_note_entry = None
+    if entry.note and entry.note.strip():
+        new_note_entry = {"text": entry.note.strip(), "created_at": now}
+
     try:
         existing = supabase.table("journal_entries").select("*").eq("user_id", entry.user_id).eq("date", entry.date).execute()
         if existing.data:
-            response = supabase.table("journal_entries").update(data).eq("id", existing.data[0]["id"]).execute()
+            existing_row = existing.data[0]
+            # Append new note to existing notes array
+            existing_notes = existing_row.get("notes") or []
+            if new_note_entry:
+                existing_notes.append(new_note_entry)
+            data["notes"] = existing_notes
+            # Keep note field as the latest for backward compatibility
+            if new_note_entry:
+                data["note"] = new_note_entry["text"]
+            response = supabase.table("journal_entries").update(data).eq("id", existing_row["id"]).execute()
         else:
+            # New entry
             data["created_at"] = now
+            if new_note_entry:
+                data["notes"] = [new_note_entry]
+                data["note"] = new_note_entry["text"]
+            else:
+                data["notes"] = []
             response = supabase.table("journal_entries").insert(data).execute()
         return response.data[0]
     except Exception as e:
