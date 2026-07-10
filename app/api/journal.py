@@ -35,6 +35,8 @@ UPDATE journal_entries SET notes = CASE
 END WHERE notes IS NULL OR notes = '[]'::jsonb;
 """
 
+RELOAD_SCHEMA_SQL = "NOTIFY pgrst, 'reload schema';"
+
 
 def _run_sql(sql: str, url: str, key: str, label: str):
     try:
@@ -66,6 +68,7 @@ def migrate_journal_table():
     _run_sql(CREATE_TABLE_SQL, url, key, "Journal table")
     _run_sql(ADD_NOTES_COLUMN_SQL, url, key, "Add notes column")
     _run_sql(BACKFILL_NOTES_SQL, url, key, "Backfill notes")
+    _run_sql(RELOAD_SCHEMA_SQL, url, key, "Reload PostgREST schema")
 
 @router.get("")
 async def get_journal_entry(user_id: str = Query(...), date: str = Query(...)):
@@ -114,21 +117,27 @@ async def save_journal_entry(entry: JournalEntryCreate):
     if entry.note and entry.note.strip():
         new_note_entry = {"text": entry.note.strip(), "created_at": now}
 
+    def _try_save(data_to_save):
+        existing = supabase.table("journal_entries").select("*").eq("user_id", entry.user_id).eq("date", entry.date).execute()
+        if existing.data:
+            existing_row = existing.data[0]
+            return supabase.table("journal_entries").update(data_to_save).eq("id", existing_row["id"]).execute()
+        else:
+            data_to_save["created_at"] = now
+            return supabase.table("journal_entries").insert(data_to_save).execute()
+
     try:
         existing = supabase.table("journal_entries").select("*").eq("user_id", entry.user_id).eq("date", entry.date).execute()
         if existing.data:
             existing_row = existing.data[0]
-            # Append new note to existing notes array
             existing_notes = existing_row.get("notes") or []
             if new_note_entry:
                 existing_notes.append(new_note_entry)
             data["notes"] = existing_notes
-            # Keep note field as the latest for backward compatibility
             if new_note_entry:
                 data["note"] = new_note_entry["text"]
             response = supabase.table("journal_entries").update(data).eq("id", existing_row["id"]).execute()
         else:
-            # New entry
             data["created_at"] = now
             if new_note_entry:
                 data["notes"] = [new_note_entry]
@@ -139,6 +148,14 @@ async def save_journal_entry(entry: JournalEntryCreate):
         return response.data[0]
     except Exception as e:
         detail = str(e)
+        if "notes" in detail.lower() and "column" in detail.lower():
+            # notes column doesn't exist yet, save without it
+            data.pop("notes", None)
+            try:
+                response = _try_save(data)
+                return response.data[0]
+            except Exception as e2:
+                raise HTTPException(status_code=500, detail=str(e2))
         if "violates foreign key constraint" in detail.lower():
             raise HTTPException(status_code=400, detail="User not found. Please create an account first.")
         if "duplicate key value" in detail.lower():
