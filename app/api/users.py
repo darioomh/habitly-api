@@ -1,15 +1,15 @@
-from fastapi import APIRouter, HTTPException, Form, Body
+from fastapi import APIRouter, HTTPException, Form, Body, Depends
 from datetime import datetime, timedelta, date
 from typing import Optional
 from collections import Counter
 from pydantic import BaseModel
 from app.database import supabase
+from app.auth import get_current_user
 
 router = APIRouter()
 
 
 def _compute_streaks(log_dates: set) -> tuple[int, int]:
-    """Compute current and best streak from a set of dates."""
     if not log_dates:
         return 0, 0
 
@@ -17,7 +17,6 @@ def _compute_streaks(log_dates: set) -> tuple[int, int]:
     today_d = date.today()
     yesterday_d = today_d - timedelta(days=1)
 
-    # Current streak: count consecutive days ending at today or yesterday
     current_streak = 0
     check = today_d
     if today_d not in log_dates and yesterday_d in log_dates:
@@ -27,7 +26,6 @@ def _compute_streaks(log_dates: set) -> tuple[int, int]:
         current_streak += 1
         check -= timedelta(days=1)
 
-    # Best streak: scan all dates for longest consecutive run
     best = 0
     run = 1
     for i in range(1, len(sorted_dates)):
@@ -44,7 +42,6 @@ def _compute_streaks(log_dates: set) -> tuple[int, int]:
 
 
 def _days_since_creation(user_id: str) -> int:
-    """Return days since the user's earliest habit log or 30."""
     try:
         resp = supabase.table("habit_logs") \
             .select("date") \
@@ -61,9 +58,8 @@ def _days_since_creation(user_id: str) -> int:
     return 30
 
 
-@router.get("/{user_id}")
-async def get_user(user_id: str):
-    """Get user by ID"""
+@router.get("/me")
+async def get_me(user_id: str = Depends(get_current_user)):
     if not supabase:
         return {"id": user_id, "email": f"user_{user_id}@demo.com", "display_name": "Usuario Habitly"}
 
@@ -73,9 +69,8 @@ async def get_user(user_id: str):
     return {"id": user_id, "email": f"user_{user_id}@demo.com", "display_name": "Usuario Habitly"}
 
 
-@router.get("/{user_id}/stats")
-async def get_user_stats(user_id: str):
-    """Get user statistics with real streak, XP, and rate computation."""
+@router.get("/me/stats")
+async def get_me_stats(user_id: str = Depends(get_current_user)):
     if not supabase:
         return {
             "id": user_id, "display_name": "Usuario Habitly", "level": 1,
@@ -96,7 +91,6 @@ async def get_user_stats(user_id: str):
         }
     user = user_resp.data[0]
 
-    # ── Habits ─────────────────────────────────────────────────────────────
     habits_resp = supabase.table("habits") \
         .select("id") \
         .eq("user_id", user_id) \
@@ -104,7 +98,6 @@ async def get_user_stats(user_id: str):
         .execute()
     total_habits = len(habits_resp.data) if habits_resp.data else 0
 
-    # ── Today's completions ────────────────────────────────────────────────
     today_str = date.today().isoformat()
     logs_today = supabase.table("habit_logs") \
         .select("id") \
@@ -114,7 +107,6 @@ async def get_user_stats(user_id: str):
         .execute()
     completed_today = len(logs_today.data) if logs_today.data else 0
 
-    # ── All completed logs ────────────────────────────────────────────────
     all_logs_resp = supabase.table("habit_logs") \
         .select("date") \
         .eq("user_id", user_id) \
@@ -124,26 +116,21 @@ async def get_user_stats(user_id: str):
     total_completed = len(all_logs)
     log_dates = {date.fromisoformat(r["date"]) for r in all_logs}
 
-    # ── Streaks ────────────────────────────────────────────────────────────
     current_streak, best_streak = _compute_streaks(log_dates)
 
-    # ── XP & Level ────────────────────────────────────────────────────────
     try:
-        # XP from habit logs (xp_earned field)
         logs_xp_resp = supabase.table("habit_logs").select("xp_earned").eq("user_id", user_id).execute()
         xp_from_logs = sum(int(r.get("xp_earned") or 0) for r in (logs_xp_resp.data or []))
     except Exception:
         xp_from_logs = total_completed * 10
 
     try:
-        # XP / points earned in challenges
         cp_resp = supabase.table("challenge_participants").select("total_points").eq("user_id", user_id).execute()
         xp_from_challenges = sum(int(r.get("total_points") or 0) for r in (cp_resp.data or []))
     except Exception:
         xp_from_challenges = 0
 
     try:
-        # Season points (if applicable)
         sp_resp = supabase.table("season_participants").select("total_points").eq("user_id", user_id).execute()
         xp_from_seasons = sum(int(r.get("total_points") or 0) for r in (sp_resp.data or []))
     except Exception:
@@ -153,12 +140,10 @@ async def get_user_stats(user_id: str):
     level = (total_xp // 100) + 1
     xp_in_level = total_xp % 100
 
-    # ── Completion rate (real: total / days since first log) ──────────────
     days_active = _days_since_creation(user_id)
     max_possible = total_habits * days_active
     completion_rate = round(total_completed / max_possible, 2) if max_possible > 0 else 0.0
 
-    # ── Insight ───────────────────────────────────────────────────────────
     if total_habits == 0:
         insight = "¡Crea tu primer hábito para empezar!"
     elif completed_today == total_habits:
@@ -189,11 +174,9 @@ async def get_user_stats(user_id: str):
     }
 
 
-@router.get("/{user_id}/achievements")
-async def get_user_achievements(user_id: str):
-    """Return list of user achievements (label, unlocked, unlocked_at)"""
+@router.get("/me/achievements")
+async def get_me_achievements(user_id: str = Depends(get_current_user)):
     if not supabase:
-        # Demo data
         return [
             {"label": "Primer hábito", "unlocked": True, "unlocked_at": None},
             {"label": "Racha 7d", "unlocked": False, "unlocked_at": None},
@@ -205,9 +188,8 @@ async def get_user_achievements(user_id: str):
     return []
 
 
-@router.post("/{user_id}/achievements")
-async def report_user_achievement(user_id: str, achievement: dict = Body(...)):
-    """Insert or update an achievement record for the user."""
+@router.post("/me/achievements")
+async def report_me_achievement(achievement: dict = Body(...), user_id: str = Depends(get_current_user)):
     if not supabase:
         return {"success": True}
 
@@ -217,7 +199,6 @@ async def report_user_achievement(user_id: str, achievement: dict = Body(...)):
 
     existing = supabase.table("user_achievements").select("id, unlocked").eq("user_id", user_id).eq("label", label).execute()
     if existing.data:
-        # update
         data = {"unlocked": unlocked, "updated_at": datetime.utcnow().isoformat()}
         if unlocked and unlocked_at:
             data["unlocked_at"] = unlocked_at
@@ -236,9 +217,8 @@ async def report_user_achievement(user_id: str, achievement: dict = Body(...)):
         return {"success": True}
 
 
-@router.get("/{user_id}/weekly-activity")
-async def get_weekly_activity(user_id: str):
-    """Return completion count per day for the last 7 days."""
+@router.get("/me/weekly-activity")
+async def get_me_weekly_activity(user_id: str = Depends(get_current_user)):
     if not supabase:
         demo = []
         for i in range(7):
@@ -264,76 +244,71 @@ async def get_weekly_activity(user_id: str):
 
 @router.post("")
 async def create_user(user_id: str = Form(...), email: str = Form(...), display_name: Optional[str] = Form(None)):
-    """Create user"""
     if not supabase:
         return {"id": user_id, "email": email}
-    
-    # Check if user already exists
+
     existing = supabase.table("users").select("*").eq("id", user_id).execute()
     if existing.data:
         return existing.data[0]
-    
+
     data = {"id": user_id, "email": email, "display_name": display_name, "created_at": datetime.utcnow().isoformat()}
     response = supabase.table("users").insert(data).execute()
     return response.data[0] if response.data else data
 
-@router.get("/{user_id}/preferences")
-async def get_preferences(user_id: str):
-    """Get user preferences"""
+@router.get("/me/preferences")
+async def get_me_preferences(user_id: str = Depends(get_current_user)):
     if not supabase:
         return {"theme": "system", "notifications": True}
-    
+
     response = supabase.table("user_preferences").select("*").eq("user_id", user_id).execute()
     if response.data:
         return response.data[0]
     return {"theme": "system", "notifications": True, "reminder_time": "09:00"}
 
-@router.put("/{user_id}/preferences")
-async def update_preferences(
-    user_id: str,
+@router.put("/me/preferences")
+async def update_me_preferences(
     theme: Optional[str] = None,
     notifications: Optional[bool] = None,
-    reminder_time: Optional[str] = None
+    reminder_time: Optional[str] = None,
+    user_id: str = Depends(get_current_user)
 ):
-    """Update user preferences"""
     if not supabase:
         return {"success": True}
-    
+
     data = {"updated_at": datetime.utcnow().isoformat()}
     if theme: data["theme"] = theme
     if notifications is not None: data["notifications"] = notifications
     if reminder_time: data["reminder_time"] = reminder_time
-    
+
     existing = supabase.table("user_preferences").select("id").eq("user_id", user_id).execute()
-    
+
     if existing.data:
         response = supabase.table("user_preferences").update(data).eq("user_id", user_id).execute()
     else:
         data["user_id"] = user_id
         data["created_at"] = datetime.utcnow().isoformat()
         response = supabase.table("user_preferences").insert(data).execute()
-    
+
     return response.data[0] if response.data else {"success": True}
 
 
 class FcmTokenRequest(BaseModel):
-    user_id: str
     fcm_token: str
     device_info: Optional[str] = None
 
 
 @router.post("/fcm-token")
-async def register_fcm_token(request: FcmTokenRequest):
+async def register_fcm_token(request: FcmTokenRequest, user_id: str = Depends(get_current_user)):
     if not supabase:
         return {"success": True}
 
-    existing = supabase.table("user_fcm_tokens").select("id").eq("user_id", request.user_id).eq("fcm_token", request.fcm_token).execute()
+    existing = supabase.table("user_fcm_tokens").select("id").eq("user_id", user_id).eq("fcm_token", request.fcm_token).execute()
     if existing.data:
         supabase.table("user_fcm_tokens").update({"updated_at": datetime.utcnow().isoformat()}).eq("id", existing.data[0]["id"]).execute()
         return {"success": True}
 
     data = {
-        "user_id": request.user_id,
+        "user_id": user_id,
         "fcm_token": request.fcm_token,
         "device_info": request.device_info,
         "created_at": datetime.utcnow().isoformat(),

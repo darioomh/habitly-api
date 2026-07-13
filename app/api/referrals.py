@@ -1,8 +1,9 @@
-from fastapi import APIRouter, HTTPException, Body
+from fastapi import APIRouter, HTTPException, Body, Depends
 from datetime import datetime
 from typing import Any, Dict
 import uuid
 from app.database import supabase
+from app.auth import get_current_user
 
 router = APIRouter()
 TARGET_INVITES = 10
@@ -15,7 +16,7 @@ def _valid_uuid(value: str) -> bool:
         return False
 
 def _fallback(user_id: str, invite_count: int = 0) -> Dict[str, Any]:
-    code = user_id[-8:].upper()
+    code = user_id[-8:].upper() if user_id else "DEMO0000"
     return {
         "user_id": user_id,
         "referral_code": code,
@@ -25,12 +26,10 @@ def _fallback(user_id: str, invite_count: int = 0) -> Dict[str, Any]:
         "referral_url": f"https://habitly.app/r/{code}",
     }
 
-@router.get("/{user_id}")
-async def get_referral_progress(user_id: str):
+@router.get("/me")
+async def get_me_referral_progress(user_id: str = Depends(get_current_user)):
     if not supabase:
         return _fallback(user_id)
-    if not _valid_uuid(user_id):
-        raise HTTPException(status_code=400, detail="Invalid user ID format")
     response = supabase.table("referral_progress").select("*").eq("user_id", user_id).execute()
     if response.data:
         return response.data[0]
@@ -43,15 +42,10 @@ async def get_referral_progress(user_id: str):
     return inserted.data[0] if inserted.data else data
 
 @router.post("/share")
-async def track_referral_share(payload: Dict[str, Any] = Body(...)):
-    user_id = payload.get("user_id")
-    if not user_id:
-        raise HTTPException(status_code=400, detail="Missing user_id")
+async def track_referral_share(payload: Dict[str, Any] = Body(...), user_id: str = Depends(get_current_user)):
     if not supabase:
         return _fallback(user_id, 1)
-    if not _valid_uuid(user_id):
-        raise HTTPException(status_code=400, detail="Invalid user ID format")
-    current = await get_referral_progress(user_id)
+    current = await get_me_referral_progress(user_id)
     invite_count = int(current.get("invite_count") or 0) + 1
     premium = invite_count >= TARGET_INVITES
     update = {

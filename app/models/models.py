@@ -24,7 +24,7 @@ class HabitBase(BaseModel):
     xp_value: int = 10
 
 class HabitCreate(HabitBase):
-    user_id: str
+    pass
 
 class HabitUpdate(BaseModel):
     title: Optional[str] = None
@@ -92,7 +92,6 @@ class JournalNote(BaseModel):
     created_at: str
 
 class JournalEntryBase(BaseModel):
-    user_id: str
     date: str
     mood: str
     note: Optional[str] = None

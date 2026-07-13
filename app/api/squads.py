@@ -1,8 +1,8 @@
-from fastapi import APIRouter, HTTPException
-from datetime import datetime
+from fastapi import APIRouter, HTTPException, Depends
 from typing import Optional
 from pydantic import BaseModel
 from app.database import supabase
+from app.auth import get_current_user
 import uuid
 
 router = APIRouter()
@@ -11,13 +11,11 @@ router = APIRouter()
 class CreateSquadRequest(BaseModel):
     name: str
     description: str
-    created_by: str
     max_members: int = 10
 
 
 class JoinSquadRequest(BaseModel):
     squad_id: str
-    user_id: str
     user_name: str
     invite_code: Optional[str] = None
 
@@ -37,24 +35,22 @@ def _generate_invite_code() -> str:
 
 
 @router.post("")
-async def create_squad(request: CreateSquadRequest):
+async def create_squad(request: CreateSquadRequest, user_id: str = Depends(get_current_user)):
     if not supabase:
         return {
             "id": f"squad-{uuid.uuid4()}",
             "name": request.name,
             "description": request.description,
-            "created_by": request.created_by,
+            "created_by": user_id,
             "invite_code": "DEMO0001",
             "max_members": request.max_members,
         }
-    if not _is_valid_uuid(request.created_by):
-        raise HTTPException(status_code=400, detail="Invalid user ID format")
 
     invite_code = _generate_invite_code()
     data = {
         "name": request.name,
         "description": request.description,
-        "created_by": request.created_by,
+        "created_by": user_id,
         "invite_code": invite_code,
         "max_members": request.max_members,
         "created_at": datetime.utcnow().isoformat(),
@@ -67,8 +63,8 @@ async def create_squad(request: CreateSquadRequest):
 
     member_data = {
         "squad_id": squad["id"],
-        "user_id": request.created_by,
-        "user_name": request.created_by,
+        "user_id": user_id,
+        "user_name": user_id,
         "role": "leader",
         "joined_at": datetime.utcnow().isoformat(),
     }
@@ -79,11 +75,9 @@ async def create_squad(request: CreateSquadRequest):
 
 
 @router.get("")
-async def get_squads(user_id: str):
+async def get_squads(user_id: str = Depends(get_current_user)):
     if not supabase:
         return []
-    if not _is_valid_uuid(user_id):
-        raise HTTPException(status_code=400, detail="Invalid user ID format")
 
     member_squad_ids = supabase.table("squad_members").select("squad_id").eq("user_id", user_id).execute()
     if not member_squad_ids.data:
@@ -119,10 +113,10 @@ async def get_squad(squad_id: str):
 
 
 @router.post("/join")
-async def join_squad(request: JoinSquadRequest):
+async def join_squad(request: JoinSquadRequest, user_id: str = Depends(get_current_user)):
     if not supabase:
-        return {"id": f"member-{request.user_id}", "squad_id": request.squad_id, "user_id": request.user_id}
-    if not _is_valid_uuid(request.squad_id) or not _is_valid_uuid(request.user_id):
+        return {"id": f"member-{user_id}", "squad_id": request.squad_id, "user_id": user_id}
+    if not _is_valid_uuid(request.squad_id):
         raise HTTPException(status_code=400, detail="Invalid ID format")
 
     squad_resp = supabase.table("squads").select("*").eq("id", request.squad_id).execute()
@@ -138,14 +132,14 @@ async def join_squad(request: JoinSquadRequest):
     if current_count >= squad["max_members"]:
         raise HTTPException(status_code=400, detail="Squad is full")
 
-    existing = supabase.table("squad_members").select("*").eq("squad_id", request.squad_id).eq("user_id", request.user_id).execute()
+    existing = supabase.table("squad_members").select("*").eq("squad_id", request.squad_id).eq("user_id", user_id).execute()
     if existing.data:
         return existing.data[0]
 
     data = {
         "squad_id": request.squad_id,
-        "user_id": request.user_id,
-        "user_name": request.user_name or request.user_id,
+        "user_id": user_id,
+        "user_name": request.user_name or user_id,
         "role": "member",
         "joined_at": datetime.utcnow().isoformat(),
     }
@@ -156,10 +150,10 @@ async def join_squad(request: JoinSquadRequest):
 
 
 @router.post("/{squad_id}/leave")
-async def leave_squad(squad_id: str, user_id: str):
+async def leave_squad(squad_id: str, user_id: str = Depends(get_current_user)):
     if not supabase:
         return {"success": True}
-    if not _is_valid_uuid(squad_id) or not _is_valid_uuid(user_id):
+    if not _is_valid_uuid(squad_id):
         raise HTTPException(status_code=400, detail="Invalid ID format")
 
     supabase.table("squad_members").delete().eq("squad_id", squad_id).eq("user_id", user_id).execute()

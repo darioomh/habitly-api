@@ -1,8 +1,9 @@
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Depends
 from datetime import datetime, timedelta
 from typing import Optional
 from pydantic import BaseModel
 from app.database import supabase
+from app.auth import get_current_user
 import uuid
 import random
 
@@ -10,7 +11,6 @@ router = APIRouter()
 
 
 class UpdateProgressRequest(BaseModel):
-    user_id: str
     stage_index: int
     completed: bool = True
 
@@ -46,7 +46,7 @@ def _initialize_expedition(user_id: str) -> dict:
 
 
 @router.get("/active")
-async def get_active_expedition(user_id: str):
+async def get_active_expedition(user_id: str = Depends(get_current_user)):
     if not supabase:
         stages = [
             {**stage, "completed": i < 2, "completed_at": datetime.utcnow().isoformat() if i < 2 else None}
@@ -91,7 +91,7 @@ async def get_expedition(expedition_id: str):
 
 
 @router.post("/{expedition_id}/progress")
-async def update_expedition_progress(expedition_id: str, request: UpdateProgressRequest):
+async def update_expedition_progress(expedition_id: str, request: UpdateProgressRequest, user_id: str = Depends(get_current_user)):
     if not supabase:
         return {"success": True}
 

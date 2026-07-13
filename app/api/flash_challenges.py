@@ -1,8 +1,9 @@
-from fastapi import APIRouter, HTTPException, Body
+from fastapi import APIRouter, HTTPException, Body, Depends
 from datetime import datetime, timedelta
 from typing import Any, Dict, List
 import uuid
 from app.database import supabase
+from app.auth import get_current_user
 
 router = APIRouter()
 
@@ -67,8 +68,7 @@ async def get_flash_challenges(user_id: str | None = None):
         return _seed_payload(user_id)
 
 @router.post("/{flash_id}/join")
-async def join_flash_challenge(flash_id: str, payload: Dict[str, Any] = Body(...)):
-    user_id = payload.get("user_id")
+async def join_flash_challenge(flash_id: str, payload: Dict[str, Any] = Body(...), user_id: str = Depends(get_current_user)):
     user_name = payload.get("user_name") or user_id
     if not supabase:
         item = next((x for x in _seed_payload(user_id) if x["id"] == flash_id), None)
@@ -77,7 +77,7 @@ async def join_flash_challenge(flash_id: str, payload: Dict[str, Any] = Body(...
         item["is_joined"] = True
         item["participants_count"] += 1
         return item
-    if not user_id or not _valid_uuid(user_id):
+    if not _valid_uuid(user_id):
         raise HTTPException(status_code=400, detail="Invalid user ID format")
     try:
         existing = (
@@ -105,14 +105,13 @@ async def join_flash_challenge(flash_id: str, payload: Dict[str, Any] = Body(...
         raise HTTPException(status_code=500, detail=f"Database error: {str(e)}")
 
 @router.post("/{flash_id}/share")
-async def share_flash_challenge(flash_id: str, payload: Dict[str, Any] = Body(...)):
-    user_id = payload.get("user_id")
+async def share_flash_challenge(flash_id: str, payload: Dict[str, Any] = Body(...), user_id: str = Depends(get_current_user)):
     if not supabase:
         item = next((x for x in _seed_payload(user_id) if x["id"] == flash_id), None)
         if not item:
             raise HTTPException(status_code=404, detail="Flash challenge not found")
         return item
-    if not user_id or not _valid_uuid(user_id):
+    if not _valid_uuid(user_id):
         raise HTTPException(status_code=400, detail="Invalid user ID format")
     try:
         supabase.table("flash_shares").insert({

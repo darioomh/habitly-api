@@ -3,9 +3,10 @@ from typing import List, Optional
 import random
 
 import httpx
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, HTTPException, Query, Depends
 
 from app.database import supabase
+from app.auth import get_current_user
 
 router = APIRouter()
 
@@ -826,7 +827,7 @@ def infer_category(item: dict) -> str:
 
 
 @router.get("/saved")
-async def get_saved_articles(user_id: str):
+async def get_saved_articles(user_id: str = Depends(get_current_user)):
     """Get saved articles for user from database."""
     if not supabase:
         return []
@@ -836,7 +837,7 @@ async def get_saved_articles(user_id: str):
 
 
 @router.post("/save")
-async def save_article(user_id: str, article_id: str):
+async def save_article(article_id: str, user_id: str = Depends(get_current_user)):
     """Save article for user."""
     if not supabase:
         return {"success": True}
@@ -870,7 +871,7 @@ async def save_article(user_id: str, article_id: str):
 
 
 @router.delete("/save")
-async def unsave_article(user_id: str, article_id: str):
+async def unsave_article(article_id: str, user_id: str = Depends(get_current_user)):
     """Remove saved article."""
     if not supabase:
         return {"success": True}

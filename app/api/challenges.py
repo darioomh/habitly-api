@@ -1,25 +1,23 @@
-from fastapi import APIRouter, HTTPException, Query, Body
+from fastapi import APIRouter, HTTPException, Query, Body, Depends
 from datetime import datetime, timedelta, date
 import calendar
 from typing import Optional, List, Dict, Any
 from pydantic import BaseModel
 import uuid
 from app.database import supabase
+from app.auth import get_current_user
 
 router = APIRouter()
 
 class JoinChallengeRequest(BaseModel):
     challenge_id: str
-    user_id: str
     user_name: str
     is_premium: bool = False
 
 class LeaveChallengeRequest(BaseModel):
     challenge_id: str
-    user_id: str
 
 class UpdateProgressRequest(BaseModel):
-    user_id: str
     total_points: Optional[int] = None
     current_streak: Optional[int] = None
     progress: Optional[int] = None
@@ -144,7 +142,6 @@ def is_valid_uuid(value: str) -> bool:
         return False
 
 def _add_participant_count(challenge: dict) -> dict:
-    """Add participant count to a challenge dict."""
     try:
         count_resp = supabase.table("challenge_participants").select("id").eq("challenge_id", challenge["id"]).execute()
         challenge["participants_count"] = len(count_resp.data) if count_resp.data else 0
@@ -175,10 +172,10 @@ async def get_challenge(challenge_id: str):
     return _add_participant_count(challenge)
 
 @router.post("/join")
-async def join_challenge(request: JoinChallengeRequest):
+async def join_challenge(request: JoinChallengeRequest, user_id: str = Depends(get_current_user)):
     if not supabase:
-        return {"id": f"participant-{request.user_id}", "challenge_id": request.challenge_id, "user_id": request.user_id, "user_name": request.user_name}
-    if not is_valid_uuid(request.challenge_id) or not is_valid_uuid(request.user_id):
+        return {"id": f"participant-{user_id}", "challenge_id": request.challenge_id, "user_id": user_id, "user_name": request.user_name}
+    if not is_valid_uuid(request.challenge_id):
         raise HTTPException(status_code=400, detail="Invalid ID format")
     try:
         challenge_resp = supabase.table("challenges").select("is_premium_required").eq("id", request.challenge_id).execute()
@@ -186,17 +183,14 @@ async def join_challenge(request: JoinChallengeRequest):
             is_premium_required = challenge_resp.data[0].get("is_premium_required", False)
             if is_premium_required and not request.is_premium:
                 raise HTTPException(status_code=403, detail="Este desafio requiere suscripcion Premium")
-        
-        # Check if already joined
-        existing = supabase.table("challenge_participants").select("*").eq("challenge_id", request.challenge_id).eq("user_id", request.user_id).execute()
+
+        existing = supabase.table("challenge_participants").select("*").eq("challenge_id", request.challenge_id).eq("user_id", user_id).execute()
         if existing.data:
-            print(f"User {request.user_id} already joined challenge {request.challenge_id}")
             return existing.data[0]
-        
-        # Insert new participant - use select() to return the inserted data
+
         data = {
             "challenge_id": request.challenge_id,
-            "user_id": request.user_id,
+            "user_id": user_id,
             "user_name": request.user_name,
             "joined_at": datetime.utcnow().isoformat(),
             "progress": 0,
@@ -204,39 +198,35 @@ async def join_challenge(request: JoinChallengeRequest):
             "best_streak": 0,
             "total_points": 0
         }
-        print(f"Inserting participant: {data}")
         response = supabase.table("challenge_participants").insert(data).execute()
-        print(f"Insert response: {response.data}")
-        
+
         if response.data:
             return response.data[0]
         else:
-            # Fallback: fetch the inserted data
-            inserted = supabase.table("challenge_participants").select("*").eq("challenge_id", request.challenge_id).eq("user_id", request.user_id).execute()
+            inserted = supabase.table("challenge_participants").select("*").eq("challenge_id", request.challenge_id).eq("user_id", user_id).execute()
             if inserted.data:
                 return inserted.data[0]
             return data
     except Exception as e:
-        print(f"Error joining challenge: {e}")
         raise HTTPException(status_code=500, detail=f"Database error: {str(e)}")
 
 @router.post("/leave")
-async def leave_challenge(request: LeaveChallengeRequest):
+async def leave_challenge(request: LeaveChallengeRequest, user_id: str = Depends(get_current_user)):
     if not supabase:
         return {"success": True}
-    if not is_valid_uuid(request.challenge_id) or not is_valid_uuid(request.user_id):
+    if not is_valid_uuid(request.challenge_id):
         raise HTTPException(status_code=400, detail="Invalid ID format")
     try:
-        response = supabase.table("challenge_participants").delete().eq("challenge_id", request.challenge_id).eq("user_id", request.user_id).execute()
+        response = supabase.table("challenge_participants").delete().eq("challenge_id", request.challenge_id).eq("user_id", user_id).execute()
         return {"success": True}
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Database error: {str(e)}")
 
 @router.patch("/{challenge_id}/progress")
-async def update_progress(challenge_id: str, request: UpdateProgressRequest):
+async def update_progress(challenge_id: str, request: UpdateProgressRequest, user_id: str = Depends(get_current_user)):
     if not supabase:
         return {"success": True}
-    if not is_valid_uuid(challenge_id) or not is_valid_uuid(request.user_id):
+    if not is_valid_uuid(challenge_id):
         raise HTTPException(status_code=400, detail="Invalid ID format")
     try:
         update_data = {}
@@ -249,7 +239,7 @@ async def update_progress(challenge_id: str, request: UpdateProgressRequest):
         if not update_data:
             raise HTTPException(status_code=400, detail="No fields to update")
 
-        response = supabase.table("challenge_participants").update(update_data).eq("challenge_id", challenge_id).eq("user_id", request.user_id).execute()
+        response = supabase.table("challenge_participants").update(update_data).eq("challenge_id", challenge_id).eq("user_id", user_id).execute()
         if response.data:
             return response.data[0]
         raise HTTPException(status_code=404, detail="Participant not found")
@@ -259,8 +249,8 @@ async def update_progress(challenge_id: str, request: UpdateProgressRequest):
         raise HTTPException(status_code=500, detail=f"Database error: {str(e)}")
 
 @router.put("/{challenge_id}/progress")
-async def update_progress_put(challenge_id: str, request: UpdateProgressRequest):
-    return await update_progress(challenge_id, request)
+async def update_progress_put(challenge_id: str, request: UpdateProgressRequest, user_id: str = Depends(get_current_user)):
+    return await update_progress(challenge_id, request, user_id)
 
 @router.get("/{challenge_id}/participants")
 async def get_participants(challenge_id: str):
@@ -422,11 +412,10 @@ async def reset_monthly_challenges(year: Optional[int] = None, month: Optional[i
 
 
 @router.post("/{challenge_id}/invites")
-async def track_challenge_invite(challenge_id: str, payload: Dict[str, Any] = Body(...)):
+async def track_challenge_invite(challenge_id: str, payload: Dict[str, Any] = Body(...), user_id: str = Depends(get_current_user)):
     if not supabase:
-        return {"challenge_id": challenge_id, "user_id": payload.get("user_id", ""), "invite_count": 1}
-    user_id = payload.get("user_id")
-    if not user_id or not is_valid_uuid(challenge_id) or not is_valid_uuid(user_id):
+        return {"challenge_id": challenge_id, "user_id": user_id, "invite_count": 1}
+    if not is_valid_uuid(challenge_id):
         raise HTTPException(status_code=400, detail="Invalid ID format")
     try:
         existing = (
@@ -482,13 +471,13 @@ async def get_challenge_points_log(
         raise HTTPException(status_code=500, detail=f"Database error: {str(e)}")
 
 
-@router.post("/{challenge_id}/participants/{user_id}/add-points")
-async def add_points_to_participant(challenge_id: str, user_id: str, payload: Dict[str, int] = Body(...)):
+@router.post("/{challenge_id}/participants/{participant_user_id}/add-points")
+async def add_points_to_participant(challenge_id: str, participant_user_id: str, payload: Dict[str, int] = Body(...)):
     if not supabase:
         points = int(payload.get("points") or 0)
-        return {"challenge_id": challenge_id, "user_id": user_id, "added": points, "total_points": points}
+        return {"challenge_id": challenge_id, "user_id": participant_user_id, "added": points, "total_points": points}
 
-    if not is_valid_uuid(challenge_id) or not is_valid_uuid(user_id):
+    if not is_valid_uuid(challenge_id) or not is_valid_uuid(participant_user_id):
         raise HTTPException(status_code=400, detail="Invalid ID format")
 
     try:
@@ -500,7 +489,7 @@ async def add_points_to_participant(challenge_id: str, user_id: str, payload: Di
         raise HTTPException(status_code=400, detail="Points must be a positive integer")
 
     try:
-        resp = supabase.table("challenge_participants").select("id,total_points").eq("challenge_id", challenge_id).eq("user_id", user_id).execute()
+        resp = supabase.table("challenge_participants").select("id,total_points").eq("challenge_id", challenge_id).eq("user_id", participant_user_id).execute()
         if not resp.data:
             raise HTTPException(status_code=404, detail="Participant not found")
 
@@ -511,7 +500,7 @@ async def add_points_to_participant(challenge_id: str, user_id: str, payload: Di
         update_resp = supabase.table("challenge_participants").update({"total_points": new_total, "updated_at": datetime.utcnow().isoformat()}).eq("id", participant["id"]).execute()
         if update_resp.data:
             return update_resp.data[0]
-        return {"challenge_id": challenge_id, "user_id": user_id, "total_points": new_total}
+        return {"challenge_id": challenge_id, "user_id": participant_user_id, "total_points": new_total}
     except HTTPException:
         raise
     except Exception as e:

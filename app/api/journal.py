@@ -1,10 +1,11 @@
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, HTTPException, Query, Depends
 from typing import List, Optional
 from datetime import datetime, timezone
 import os
 import httpx
 from app.database import supabase
 from app.models.models import JournalEntry, JournalEntryCreate, JournalListResponse
+from app.auth import get_current_user
 
 router = APIRouter()
 
@@ -59,7 +60,6 @@ def _run_sql(sql: str, url: str, key: str, label: str):
 
 
 def migrate_journal_table():
-    """Ensure journal_entries table has all columns, on startup."""
     url = os.environ.get("SUPABASE_URL", "")
     key = os.environ.get("SUPABASE_KEY", "")
     if not url or not key:
@@ -71,8 +71,7 @@ def migrate_journal_table():
     _run_sql(RELOAD_SCHEMA_SQL, url, key, "Reload PostgREST schema")
 
 @router.get("")
-async def get_journal_entry(user_id: str = Query(...), date: str = Query(...)):
-    """Get journal entry for a specific date"""
+async def get_journal_entry(date: str = Query(...), user_id: str = Depends(get_current_user)):
     if not supabase:
         return {"id": None, "user_id": user_id, "date": date, "mood": "", "note": None, "habit_reflections": None, "notes": []}
     try:
@@ -84,8 +83,7 @@ async def get_journal_entry(user_id: str = Query(...), date: str = Query(...)):
         raise HTTPException(status_code=500, detail=str(e))
 
 @router.get("/range")
-async def get_journal_entries(user_id: str = Query(...), from_date: str = Query(alias="from"), to: str = Query(...)):
-    """Get journal entries in a date range"""
+async def get_journal_entries(from_date: str = Query(alias="from"), to: str = Query(...), user_id: str = Depends(get_current_user)):
     if not supabase:
         return {"entries": []}
     try:
@@ -103,22 +101,21 @@ async def get_journal_entries(user_id: str = Query(...), from_date: str = Query(
         raise HTTPException(status_code=500, detail=str(e))
 
 @router.post("")
-async def save_journal_entry(entry: JournalEntryCreate):
-    """Create or update a journal entry. Appends note to notes array instead of replacing."""
+async def save_journal_entry(entry: JournalEntryCreate, user_id: str = Depends(get_current_user)):
     if not supabase:
         raise HTTPException(status_code=500, detail="Supabase not configured")
 
     now = datetime.now(timezone.utc).isoformat()
     data = entry.model_dump(exclude_none=True)
+    data["user_id"] = user_id
     data["updated_at"] = now
 
-    # Build the new note entry to append
     new_note_entry = None
     if entry.note and entry.note.strip():
         new_note_entry = {"text": entry.note.strip(), "created_at": now}
 
     def _try_save(data_to_save):
-        existing = supabase.table("journal_entries").select("*").eq("user_id", entry.user_id).eq("date", entry.date).execute()
+        existing = supabase.table("journal_entries").select("*").eq("user_id", user_id).eq("date", entry.date).execute()
         if existing.data:
             existing_row = existing.data[0]
             return supabase.table("journal_entries").update(data_to_save).eq("id", existing_row["id"]).execute()
@@ -127,7 +124,7 @@ async def save_journal_entry(entry: JournalEntryCreate):
             return supabase.table("journal_entries").insert(data_to_save).execute()
 
     try:
-        existing = supabase.table("journal_entries").select("*").eq("user_id", entry.user_id).eq("date", entry.date).execute()
+        existing = supabase.table("journal_entries").select("*").eq("user_id", user_id).eq("date", entry.date).execute()
         if existing.data:
             existing_row = existing.data[0]
             existing_notes = existing_row.get("notes") or []
@@ -149,7 +146,6 @@ async def save_journal_entry(entry: JournalEntryCreate):
     except Exception as e:
         detail = str(e)
         if "notes" in detail.lower() and "column" in detail.lower():
-            # notes column doesn't exist yet, save without it
             data.pop("notes", None)
             try:
                 response = _try_save(data)
@@ -164,7 +160,6 @@ async def save_journal_entry(entry: JournalEntryCreate):
 
 @router.delete("/{entry_id}")
 async def delete_journal_entry(entry_id: str):
-    """Delete a journal entry"""
     if not supabase:
         raise HTTPException(status_code=500, detail="Supabase not configured")
     try:
