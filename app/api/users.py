@@ -316,3 +316,24 @@ async def register_fcm_token(request: FcmTokenRequest, user_id: str = Depends(ge
     }
     supabase.table("user_fcm_tokens").insert(data).execute()
     return {"success": True}
+
+
+@router.delete("/me")
+async def delete_me(user_id: str = Depends(get_current_user)):
+    if not supabase:
+        return {"success": True}
+
+    tables_to_clean = [
+        "habit_logs", "habits", "habit_reminders",
+        "user_achievements", "user_preferences", "user_fcm_tokens",
+        "journal_entries", "challenge_participants",
+        "season_participants", "referral_progress",
+    ]
+    for table in tables_to_clean:
+        try:
+            supabase.table(table).delete().eq("user_id", user_id).execute()
+        except Exception:
+            pass
+
+    supabase.table("users").delete().eq("id", user_id).execute()
+    return {"success": True}
