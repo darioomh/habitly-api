@@ -1,13 +1,19 @@
-__pycache__/
-*.pyc
-*.pyo
-.env
-venv/
-.vscode/
-.idea/
-.python-version
-
+# Environment
 .env
 .env.local
 .env.production
+
+# Python
 __pycache__/
+*.pyc
+*.pyo
+venv/
+.venv/
+
+# IDE
+.idea/
+.vscode/
+
+# OS
+.DS_Store
+Thumbs.db
