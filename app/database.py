@@ -13,7 +13,7 @@ except FileNotFoundError:
     pass
 
 SUPABASE_URL = os.environ.get("SUPABASE_URL", "")
-SUPABASE_KEY = os.environ.get("SUPABASE_KEY", "")
+SUPABASE_KEY = os.environ.get("SUPABASE_KEY", "")  # Must be the service_role key to bypass RLS
 
 if not SUPABASE_URL or "tu-proyecto" in SUPABASE_URL:
     print("WARNING: Supabase not configured. Using dev mode.")
