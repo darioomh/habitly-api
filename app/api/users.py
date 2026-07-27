@@ -337,3 +337,21 @@ async def delete_me(user_id: str = Depends(get_current_user)):
 
     supabase.table("users").delete().eq("id", user_id).execute()
     return {"success": True}
+
+
+@router.put("/me")
+async def update_me(
+    display_name: Optional[str] = Form(None),
+    user_id: str = Depends(get_current_user)
+):
+    if not supabase:
+        return {"id": user_id, "display_name": display_name}
+
+    data = {"updated_at": datetime.utcnow().isoformat()}
+    if display_name is not None:
+        data["display_name"] = display_name
+
+    response = supabase.table("users").update(data).eq("id", user_id).execute()
+    if response.data:
+        return response.data[0]
+    return {"id": user_id, "display_name": display_name}
