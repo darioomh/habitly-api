@@ -253,7 +253,14 @@ async def create_user(user_id: str = Form(...), email: str = Form(...), display_
 
     data = {"id": user_id, "email": email, "display_name": display_name, "created_at": datetime.utcnow().isoformat()}
     response = supabase.table("users").insert(data).execute()
-    return response.data[0] if response.data else data
+    if getattr(response, "error", None):
+        raise HTTPException(status_code=500, detail=f"Error al crear usuario: {response.error.message}")
+    if not response.data:
+        raise HTTPException(
+            status_code=500,
+            detail="No se pudo crear el usuario. Si SUPABASE_KEY es la anon key, el RLS bloquea la escritura. Usa la service_role key.",
+        )
+    return response.data[0]
 
 @router.get("/me/preferences")
 async def get_me_preferences(user_id: str = Depends(get_current_user)):

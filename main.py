@@ -4,11 +4,39 @@ from contextlib import asynccontextmanager
 from app.api import habits, users, articles, settings, challenges, auth, squads, expeditions, seasons, flash_challenges, referrals, journal
 
 
+def check_supabase_access():
+    from app.database import supabase
+    if not supabase:
+        print("WARNING: Supabase no configurado. Los endpoints devolverán datos demo.")
+        return
+    try:
+        resp = supabase.table("users").select("id").limit(1).execute()
+        error = getattr(resp, "error", None)
+        if error:
+            print(f"WARNING: No se puede leer la tabla users ({error.message}). Si SUPABASE_KEY es la anon key, el RLS bloquea el acceso. Usa la service_role key.")
+        else:
+            print("Supabase OK: el backend puede leer la tabla users (bypass de RLS correcto).")
+    except Exception as e:
+        print(f"WARNING: Error al verificar acceso a Supabase: {e}. ¿SUPABASE_KEY es la service_role key?")
+        return
+    try:
+        col = supabase.table("users").select("password_hash").limit(1).execute()
+        col_error = getattr(col, "error", None)
+        if col_error and "password_hash" in str(col_error):
+            print("WARNING: Falta la columna password_hash en users. Ejecuta migrations/005_password_hash.sql en el SQL Editor de Supabase.")
+        else:
+            print("Supabase OK: columna password_hash presente.")
+    except Exception as e:
+        print(f"WARNING: No se pudo verificar la columna password_hash: {e}")
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Run seeds and migrations on startup."""
     challenges.seed_challenges_on_startup()
     journal.migrate_journal_table()
+    auth.migrate_auth_table()
+    check_supabase_access()
     yield
 
 
