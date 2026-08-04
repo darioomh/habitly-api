@@ -1,5 +1,5 @@
 from fastapi import APIRouter, HTTPException, Depends
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Optional
 from pydantic import BaseModel
 from app.database import supabase
@@ -38,7 +38,7 @@ def _initialize_expedition(user_id: str) -> dict:
         "user_id": user_id,
         "stages": stages,
         "current_stage": 0,
-        "started_at": datetime.utcnow().isoformat(),
+        "started_at": datetime.now(timezone.utc).isoformat(),
         "completed": False,
     }
     response = supabase.table("expeditions").insert(data).execute()
@@ -49,7 +49,7 @@ def _initialize_expedition(user_id: str) -> dict:
 async def get_active_expedition(user_id: str = Depends(get_current_user)):
     if not supabase:
         stages = [
-            {**stage, "completed": i < 2, "completed_at": datetime.utcnow().isoformat() if i < 2 else None}
+            {**stage, "completed": i < 2, "completed_at": datetime.now(timezone.utc).isoformat() if i < 2 else None}
             for i, stage in enumerate(DEFAULT_STAGES)
         ]
         return {
@@ -57,7 +57,7 @@ async def get_active_expedition(user_id: str = Depends(get_current_user)):
             "user_id": user_id,
             "stages": stages,
             "current_stage": 2,
-            "started_at": datetime.utcnow().isoformat(),
+            "started_at": datetime.now(timezone.utc).isoformat(),
             "completed": False,
         }
 
@@ -76,7 +76,7 @@ async def get_active_expedition(user_id: str = Depends(get_current_user)):
 
 
 @router.get("/{expedition_id}")
-async def get_expedition(expedition_id: str):
+async def get_expedition(expedition_id: str, user_id: str = Depends(get_current_user)):
     if not supabase:
         raise HTTPException(status_code=500, detail="Supabase no configurado")
     try:
@@ -87,7 +87,10 @@ async def get_expedition(expedition_id: str):
     response = supabase.table("expeditions").select("*").eq("id", expedition_id).execute()
     if not response.data:
         raise HTTPException(status_code=404, detail="Expedition not found")
-    return response.data[0]
+    expedition = response.data[0]
+    if str(expedition.get("user_id")) != str(user_id):
+        raise HTTPException(status_code=403, detail="No tienes acceso a esta expedición")
+    return expedition
 
 
 @router.post("/{expedition_id}/progress")
@@ -105,6 +108,8 @@ async def update_expedition_progress(expedition_id: str, request: UpdateProgress
         raise HTTPException(status_code=404, detail="Expedition not found")
 
     expedition = response.data[0]
+    if str(expedition.get("user_id")) != str(user_id):
+        raise HTTPException(status_code=403, detail="No tienes acceso a esta expedición")
     stages = expedition.get("stages", [])
 
     if request.stage_index < 0 or request.stage_index >= len(stages):
@@ -114,7 +119,7 @@ async def update_expedition_progress(expedition_id: str, request: UpdateProgress
         return expedition
 
     stages[request.stage_index]["completed"] = True
-    stages[request.stage_index]["completed_at"] = datetime.utcnow().isoformat()
+    stages[request.stage_index]["completed_at"] = datetime.now(timezone.utc).isoformat()
 
     next_stage = request.stage_index + 1
     all_completed = next_stage >= len(stages)

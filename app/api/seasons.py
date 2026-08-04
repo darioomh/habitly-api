@@ -1,19 +1,19 @@
 from fastapi import APIRouter, HTTPException
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from app.database import supabase
 
 router = APIRouter()
 
 
 def _get_current_season_dates():
-    now = datetime.utcnow()
+    now = datetime.now(timezone.utc)
     month = now.month
     year = now.year
-    start_date = datetime(year, month, 1)
+    start_date = datetime(year, month, 1, tzinfo=timezone.utc)
     if month == 12:
-        end_date = datetime(year + 1, 1, 1) - timedelta(seconds=1)
+        end_date = datetime(year + 1, 1, 1, tzinfo=timezone.utc) - timedelta(seconds=1)
     else:
-        end_date = datetime(year, month + 1, 1) - timedelta(seconds=1)
+        end_date = datetime(year, month + 1, 1, tzinfo=timezone.utc) - timedelta(seconds=1)
     return start_date.isoformat(), end_date.isoformat()
 
 
@@ -27,7 +27,7 @@ SEASON_NAMES = [
 
 @router.get("/current")
 async def get_current_season():
-    now = datetime.utcnow()
+    now = datetime.now(timezone.utc)
     season_index = (now.month - 1) // 3
     season_name = SEASON_NAMES[season_index] if season_index < len(SEASON_NAMES) else "Temporada Especial"
 

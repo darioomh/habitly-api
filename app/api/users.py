@@ -1,5 +1,5 @@
 from fastapi import APIRouter, HTTPException, Form, Body, Depends
-from datetime import datetime, timedelta, date
+from datetime import datetime, timedelta, date, timezone
 from typing import Optional
 from collections import Counter
 from pydantic import BaseModel
@@ -195,11 +195,11 @@ async def report_me_achievement(achievement: dict = Body(...), user_id: str = De
 
     label = achievement.get("label")
     unlocked = achievement.get("unlocked", False)
-    unlocked_at = achievement.get("unlocked_at") or datetime.utcnow().isoformat() if unlocked else None
+    unlocked_at = achievement.get("unlocked_at") or datetime.now(timezone.utc).isoformat() if unlocked else None
 
     existing = supabase.table("user_achievements").select("id, unlocked").eq("user_id", user_id).eq("label", label).execute()
     if existing.data:
-        data = {"unlocked": unlocked, "updated_at": datetime.utcnow().isoformat()}
+        data = {"unlocked": unlocked, "updated_at": datetime.now(timezone.utc).isoformat()}
         if unlocked and unlocked_at:
             data["unlocked_at"] = unlocked_at
         supabase.table("user_achievements").update(data).eq("id", existing.data[0]["id"]).execute()
@@ -210,8 +210,8 @@ async def report_me_achievement(achievement: dict = Body(...), user_id: str = De
             "label": label,
             "unlocked": unlocked,
             "unlocked_at": unlocked_at,
-            "created_at": datetime.utcnow().isoformat(),
-            "updated_at": datetime.utcnow().isoformat()
+            "created_at": datetime.now(timezone.utc).isoformat(),
+            "updated_at": datetime.now(timezone.utc).isoformat()
         }
         supabase.table("user_achievements").insert(data).execute()
         return {"success": True}
@@ -243,7 +243,10 @@ async def get_me_weekly_activity(user_id: str = Depends(get_current_user)):
     return result
 
 @router.post("")
-async def create_user(user_id: str = Form(...), email: str = Form(...), display_name: Optional[str] = Form(None)):
+async def create_user(user_id: str = Form(...), email: str = Form(...), display_name: Optional[str] = Form(None), auth_user_id: str = Depends(get_current_user)):
+    if str(user_id) != str(auth_user_id):
+        raise HTTPException(status_code=403, detail="No puedes crear un usuario distinto al autenticado")
+
     if not supabase:
         return {"id": user_id, "email": email}
 
@@ -251,7 +254,7 @@ async def create_user(user_id: str = Form(...), email: str = Form(...), display_
     if existing.data:
         return existing.data[0]
 
-    data = {"id": user_id, "email": email, "display_name": display_name, "created_at": datetime.utcnow().isoformat()}
+    data = {"id": user_id, "email": email, "display_name": display_name, "created_at": datetime.now(timezone.utc).isoformat()}
     response = supabase.table("users").insert(data).execute()
     if getattr(response, "error", None):
         raise HTTPException(status_code=500, detail=f"Error al crear usuario: {response.error.message}")
@@ -282,7 +285,7 @@ async def update_me_preferences(
     if not supabase:
         return {"success": True}
 
-    data = {"updated_at": datetime.utcnow().isoformat()}
+    data = {"updated_at": datetime.now(timezone.utc).isoformat()}
     if theme: data["theme"] = theme
     if notifications is not None: data["notifications"] = notifications
     if reminder_time: data["reminder_time"] = reminder_time
@@ -293,7 +296,7 @@ async def update_me_preferences(
         response = supabase.table("user_preferences").update(data).eq("user_id", user_id).execute()
     else:
         data["user_id"] = user_id
-        data["created_at"] = datetime.utcnow().isoformat()
+        data["created_at"] = datetime.now(timezone.utc).isoformat()
         response = supabase.table("user_preferences").insert(data).execute()
 
     return response.data[0] if response.data else {"success": True}
@@ -311,15 +314,15 @@ async def register_fcm_token(request: FcmTokenRequest, user_id: str = Depends(ge
 
     existing = supabase.table("user_fcm_tokens").select("id").eq("user_id", user_id).eq("fcm_token", request.fcm_token).execute()
     if existing.data:
-        supabase.table("user_fcm_tokens").update({"updated_at": datetime.utcnow().isoformat()}).eq("id", existing.data[0]["id"]).execute()
+        supabase.table("user_fcm_tokens").update({"updated_at": datetime.now(timezone.utc).isoformat()}).eq("id", existing.data[0]["id"]).execute()
         return {"success": True}
 
     data = {
         "user_id": user_id,
         "fcm_token": request.fcm_token,
         "device_info": request.device_info,
-        "created_at": datetime.utcnow().isoformat(),
-        "updated_at": datetime.utcnow().isoformat(),
+        "created_at": datetime.now(timezone.utc).isoformat(),
+        "updated_at": datetime.now(timezone.utc).isoformat(),
     }
     supabase.table("user_fcm_tokens").insert(data).execute()
     return {"success": True}
@@ -333,14 +336,21 @@ async def delete_me(user_id: str = Depends(get_current_user)):
     tables_to_clean = [
         "habit_logs", "habits", "habit_reminders",
         "user_achievements", "user_preferences", "user_fcm_tokens",
-        "journal_entries", "challenge_participants",
+        "journal_entries", "challenge_participants", "challenge_invites",
         "season_participants", "referral_progress",
+        "squad_members", "flash_participants", "flash_shares",
+        "challenge_points_log",
     ]
     for table in tables_to_clean:
         try:
             supabase.table(table).delete().eq("user_id", user_id).execute()
         except Exception:
             pass
+
+    try:
+        supabase.table("squads").delete().eq("created_by", user_id).execute()
+    except Exception:
+        pass
 
     supabase.table("users").delete().eq("id", user_id).execute()
     return {"success": True}
@@ -354,7 +364,7 @@ async def update_me(
     if not supabase:
         return {"id": user_id, "display_name": display_name}
 
-    data = {"updated_at": datetime.utcnow().isoformat()}
+    data = {"updated_at": datetime.now(timezone.utc).isoformat()}
     if display_name is not None:
         data["display_name"] = display_name
 

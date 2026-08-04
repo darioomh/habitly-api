@@ -1,7 +1,8 @@
 from fastapi import APIRouter, HTTPException, Query, Body, BackgroundTasks, Depends
 from typing import List, Optional, Dict, Any
-from datetime import datetime
+from datetime import datetime, timezone
 import os
+import uuid
 import httpx
 import asyncio
 from app.database import supabase
@@ -9,6 +10,16 @@ from app.models.models import Habit, HabitCreate
 from app.auth import get_current_user
 
 router = APIRouter()
+
+FCM_LEGACY_URL = "https://fcm.googleapis.com/fcm/send"
+
+
+def _is_valid_uuid(value: str) -> bool:
+    try:
+        uuid.UUID(value)
+        return True
+    except Exception:
+        return False
 
 
 async def send_fcm_notification_async(tokens: List[str], title: str, body: str, data: Dict[str, Any] | None = None) -> bool:
@@ -19,10 +30,24 @@ async def send_fcm_notification_async(tokens: List[str], title: str, body: str, 
     payload = {"registration_ids": tokens, "notification": {"title": title, "body": body}, "data": data or {}}
     try:
         async with httpx.AsyncClient() as client:
-            resp = await client.post("https://fcm.googleapis.com/fcm/send", json=payload, headers=headers, timeout=5.0)
+            resp = await client.post(FCM_LEGACY_URL, json=payload, headers=headers, timeout=5.0)
             return resp.status_code == 200
     except Exception:
         return False
+
+
+def _get_habit(habit_id: str) -> dict:
+    response = supabase.table("habits").select("*").eq("id", habit_id).execute()
+    if not response.data:
+        raise HTTPException(status_code=404, detail="Habit not found")
+    return response.data[0]
+
+
+def _assert_owns_habit(habit_id: str, user_id: str) -> dict:
+    habit = _get_habit(habit_id)
+    if str(habit.get("user_id")) != str(user_id):
+        raise HTTPException(status_code=403, detail="No tienes permiso sobre este hábito")
+    return habit
 
 @router.get("")
 async def get_habits(
@@ -40,14 +65,12 @@ async def get_habits(
     return response.data if response.data else []
 
 @router.get("/{habit_id}")
-async def get_habit(habit_id: str):
+async def get_habit(habit_id: str, user_id: str = Depends(get_current_user)):
     if not supabase:
         raise HTTPException(status_code=500, detail="Supabase no configurado")
 
-    response = supabase.table("habits").select("*").eq("id", habit_id).execute()
-    if not response.data:
-        raise HTTPException(status_code=404, detail="Habit not found")
-    return response.data[0]
+    habit = _assert_owns_habit(habit_id, user_id)
+    return habit
 
 @router.post("")
 async def create_habit(habit: HabitCreate, user_id: str = Depends(get_current_user)):
@@ -56,8 +79,8 @@ async def create_habit(habit: HabitCreate, user_id: str = Depends(get_current_us
 
     data = habit.model_dump()
     data["user_id"] = user_id
-    data["created_at"] = datetime.utcnow().isoformat()
-    data["updated_at"] = datetime.utcnow().isoformat()
+    data["created_at"] = datetime.now(timezone.utc).isoformat()
+    data["updated_at"] = datetime.now(timezone.utc).isoformat()
 
     response = supabase.table("habits").insert(data).execute()
     if response.error:
@@ -65,11 +88,13 @@ async def create_habit(habit: HabitCreate, user_id: str = Depends(get_current_us
     return response.data[0]
 
 @router.put("/{habit_id}")
-async def update_habit(habit_id: str, title: Optional[str] = None, description: Optional[str] = None):
+async def update_habit(habit_id: str, title: Optional[str] = None, description: Optional[str] = None, user_id: str = Depends(get_current_user)):
     if not supabase:
         raise HTTPException(status_code=500, detail="Supabase no configurado")
 
-    data = {"updated_at": datetime.utcnow().isoformat()}
+    _assert_owns_habit(habit_id, user_id)
+
+    data = {"updated_at": datetime.now(timezone.utc).isoformat()}
     if title:
         data["title"] = title
     if description:
@@ -83,9 +108,11 @@ async def update_habit(habit_id: str, title: Optional[str] = None, description: 
     return response.data[0]
 
 @router.delete("/{habit_id}")
-async def delete_habit(habit_id: str):
+async def delete_habit(habit_id: str, user_id: str = Depends(get_current_user)):
     if not supabase:
         raise HTTPException(status_code=500, detail="Supabase no configurado")
+
+    _assert_owns_habit(habit_id, user_id)
 
     response = supabase.table("habits").update({"is_active": False}).eq("id", habit_id).execute()
     if response.error:
@@ -104,6 +131,8 @@ async def create_habit_log(
     if not supabase:
         return {"id": f"log-{habit_id}-{date}", "habit_id": habit_id, "completed": completed}
 
+    _assert_owns_habit(habit_id, user_id)
+
     data = {
         "habit_id": habit_id,
         "user_id": user_id,
@@ -111,15 +140,10 @@ async def create_habit_log(
         "completed": completed,
         "notes": notes,
         "xp_earned": 10 if completed else 0,
-        "created_at": datetime.utcnow().isoformat()
+        "created_at": datetime.now(timezone.utc).isoformat()
     }
 
     existing = supabase.table("habit_logs").select("*").eq("habit_id", habit_id).eq("date", date).execute()
-
-    if existing.data:
-        response = supabase.table("habit_logs").update(data).eq("id", existing.data[0]["id"]).execute()
-    else:
-        response = None
 
     if existing.data:
         response = supabase.table("habit_logs").update(data).eq("id", existing.data[0]["id"]).execute()
@@ -174,7 +198,7 @@ async def create_habit_log(
                             participant = part_resp.data[0]
                             current = int(participant.get("total_points") or 0)
                             new_total = current + xp_amount
-                            supabase.table("challenge_participants").update({"total_points": new_total, "updated_at": datetime.utcnow().isoformat()}).eq("id", participant["id"]).execute()
+                            supabase.table("challenge_participants").update({"total_points": new_total, "updated_at": datetime.now(timezone.utc).isoformat()}).eq("id", participant["id"]).execute()
                             participant_id = participant.get("id")
                         else:
                             try:
@@ -186,7 +210,7 @@ async def create_habit_log(
                                 "challenge_id": challenge_id,
                                 "user_id": user_id,
                                 "user_name": user_name,
-                                "joined_at": datetime.utcnow().isoformat(),
+                                "joined_at": datetime.now(timezone.utc).isoformat(),
                                 "progress": 0,
                                 "current_streak": 0,
                                 "best_streak": 0,
@@ -204,7 +228,7 @@ async def create_habit_log(
                                 "habit_id": habit_id,
                                 "points": xp_amount,
                                 "reason": f"habit_log:{habit_log_id or ''}",
-                                "created_at": datetime.utcnow().isoformat()
+                                "created_at": datetime.now(timezone.utc).isoformat()
                             }
                             supabase.table("challenge_points_log").insert(log_entry).execute()
                         except Exception:
@@ -225,19 +249,11 @@ async def create_habit_log(
                             if tokens:
                                 title = f"Ganaste {xp_amount} XP"
                                 body = f"Has recibido {xp_amount} XP por completar un hábito en {ch_title}."
-                                try:
-                                    if background_tasks:
-                                        background_tasks.add_task(send_fcm_notification_async, tokens, title, body, {"challenge_id": challenge_id, "points": xp_amount})
-                                    else:
-                                        try:
-                                            asyncio.create_task(send_fcm_notification_async(tokens, title, body, {"challenge_id": challenge_id, "points": xp_amount}))
-                                        except Exception:
-                                            try:
-                                                httpx.post("https://fcm.googleapis.com/fcm/send", json={"registration_ids": tokens, "notification": {"title": title, "body": body}, "data": {"challenge_id": challenge_id, "points": xp_amount}}, headers={"Authorization": f"key={os.getenv('FCM_SERVER_KEY')}", "Content-Type": "application/json"}, timeout=5.0)
-                                            except Exception:
-                                                pass
-                                except Exception:
-                                    pass
+                                fcm_data = {"challenge_id": challenge_id, "points": xp_amount}
+                                if background_tasks:
+                                    background_tasks.add_task(send_fcm_notification_async, tokens, title, body, fcm_data)
+                                else:
+                                    asyncio.create_task(send_fcm_notification_async(tokens, title, body, fcm_data))
                         except Exception:
                             pass
 
@@ -249,9 +265,13 @@ async def create_habit_log(
     return result
 
 @router.get("/logs/{habit_id}")
-async def get_habit_logs(habit_id: str):
+async def get_habit_logs(habit_id: str, user_id: str = Depends(get_current_user)):
     if not supabase:
         return []
+    if not _is_valid_uuid(habit_id):
+        raise HTTPException(status_code=400, detail="Invalid habit ID format")
+
+    _assert_owns_habit(habit_id, user_id)
 
     response = supabase.table("habit_logs").select("*").eq("habit_id", habit_id).order("date", desc=True).execute()
     return response.data if response.data else []

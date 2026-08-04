@@ -1,5 +1,6 @@
 from fastapi import APIRouter, HTTPException, Depends
 from typing import Optional
+from datetime import datetime, timezone
 from pydantic import BaseModel
 from app.database import supabase
 from app.auth import get_current_user
@@ -53,7 +54,7 @@ async def create_squad(request: CreateSquadRequest, user_id: str = Depends(get_c
         "created_by": user_id,
         "invite_code": invite_code,
         "max_members": request.max_members,
-        "created_at": datetime.utcnow().isoformat(),
+        "created_at": datetime.now(timezone.utc).isoformat(),
     }
     response = supabase.table("squads").insert(data).execute()
     if not response.data:
@@ -66,7 +67,7 @@ async def create_squad(request: CreateSquadRequest, user_id: str = Depends(get_c
         "user_id": user_id,
         "user_name": user_id,
         "role": "leader",
-        "joined_at": datetime.utcnow().isoformat(),
+        "joined_at": datetime.now(timezone.utc).isoformat(),
     }
     supabase.table("squad_members").insert(member_data).execute()
 
@@ -87,15 +88,18 @@ async def get_squads(user_id: str = Depends(get_current_user)):
     response = supabase.table("squads").select("*").in_("id", ids).execute()
     squads = response.data if response.data else []
 
+    count_resp = supabase.table("squad_members").select("squad_id").in_("squad_id", ids).execute()
+    counts: dict = {}
+    for row in (count_resp.data or []):
+        counts[row["squad_id"]] = counts.get(row["squad_id"], 0) + 1
     for squad in squads:
-        count_resp = supabase.table("squad_members").select("id").eq("squad_id", squad["id"]).execute()
-        squad["members_count"] = len(count_resp.data) if count_resp.data else 0
+        squad["members_count"] = counts.get(squad["id"], 0)
 
     return squads
 
 
 @router.get("/{squad_id}")
-async def get_squad(squad_id: str):
+async def get_squad(squad_id: str, user_id: str = Depends(get_current_user)):
     if not supabase:
         raise HTTPException(status_code=500, detail="Supabase no configurado")
     if not _is_valid_uuid(squad_id):
@@ -104,6 +108,10 @@ async def get_squad(squad_id: str):
     response = supabase.table("squads").select("*").eq("id", squad_id).execute()
     if not response.data:
         raise HTTPException(status_code=404, detail="Squad not found")
+
+    membership = supabase.table("squad_members").select("id").eq("squad_id", squad_id).eq("user_id", user_id).execute()
+    if not membership.data:
+        raise HTTPException(status_code=403, detail="No eres miembro de este squad")
 
     squad = response.data[0]
     members_resp = supabase.table("squad_members").select("*").eq("squad_id", squad_id).execute()
@@ -141,7 +149,7 @@ async def join_squad(request: JoinSquadRequest, user_id: str = Depends(get_curre
         "user_id": user_id,
         "user_name": request.user_name or user_id,
         "role": "member",
-        "joined_at": datetime.utcnow().isoformat(),
+        "joined_at": datetime.now(timezone.utc).isoformat(),
     }
     response = supabase.table("squad_members").insert(data).execute()
     if response.data:

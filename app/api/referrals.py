@@ -1,5 +1,5 @@
 from fastapi import APIRouter, HTTPException, Body, Depends
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any, Dict
 import uuid
 from app.database import supabase
@@ -36,8 +36,8 @@ async def get_me_referral_progress(user_id: str = Depends(get_current_user)):
     data = _fallback(user_id)
     inserted = supabase.table("referral_progress").insert({
         **data,
-        "created_at": datetime.utcnow().isoformat(),
-        "updated_at": datetime.utcnow().isoformat(),
+        "created_at": datetime.now(timezone.utc).isoformat(),
+        "updated_at": datetime.now(timezone.utc).isoformat(),
     }).execute()
     return inserted.data[0] if inserted.data else data
 
@@ -51,7 +51,7 @@ async def track_referral_share(payload: Dict[str, Any] = Body(...), user_id: str
     update = {
         "invite_count": invite_count,
         "is_premium_unlocked": premium,
-        "updated_at": datetime.utcnow().isoformat(),
+        "updated_at": datetime.now(timezone.utc).isoformat(),
     }
     response = supabase.table("referral_progress").update(update).eq("user_id", user_id).execute()
     if premium:

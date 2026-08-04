@@ -1,4 +1,4 @@
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import List, Optional
 import random
 
@@ -25,7 +25,7 @@ WEEKLY_ROTATION_SETS = {
 }
 
 def get_active_set() -> str:
-    week_number = datetime.utcnow().isocalendar()[1]
+    week_number = datetime.now(timezone.utc).isocalendar()[1]
     return WEEKLY_ROTATION_SETS.get(week_number % 4, "set_a")
 
 ARTICLES_DB = {
@@ -761,9 +761,9 @@ async def get_articles(category: Optional[str] = Query(None), limit: int = 20):
     result = []
     for index, item in enumerate(filtered[:limit]):
         article = {**item}
-        article["published_at"] = (datetime.utcnow() - timedelta(days=index)).isoformat()
+        article["published_at"] = (datetime.now(timezone.utc) - timedelta(days=index)).isoformat()
         article["is_featured"] = index < 3
-        article["created_at"] = datetime.utcnow().isoformat()
+        article["created_at"] = datetime.now(timezone.utc).isoformat()
         article["image_url"] = article.get("image_url") or ARTICLE_IMAGES.get(
             article["category"],
             ARTICLE_IMAGES["wellness"],
@@ -863,7 +863,7 @@ async def save_article(article_id: str, user_id: str = Depends(get_current_user)
     data = {
         "user_id": user_id,
         "article_id": article_id,
-        "saved_at": datetime.utcnow().isoformat(),
+        "saved_at": datetime.now(timezone.utc).isoformat(),
     }
 
     response = supabase.table("saved_articles").insert(data).execute()

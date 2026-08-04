@@ -1,6 +1,7 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from contextlib import asynccontextmanager
+import os
 from app.api import habits, users, articles, settings, challenges, auth, squads, expeditions, seasons, flash_challenges, referrals, journal
 
 
@@ -33,6 +34,10 @@ def check_supabase_access():
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Run seeds and migrations on startup."""
+    if os.getenv("SKIP_STARTUP_TASKS", "").lower() in ("1", "true", "yes"):
+        check_supabase_access()
+        yield
+        return
     challenges.seed_challenges_on_startup()
     journal.migrate_journal_table()
     auth.migrate_auth_table()
@@ -47,10 +52,17 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
+def _cors_origins() -> list[str]:
+    raw = os.getenv("CORS_ORIGINS", "").strip()
+    if raw:
+        return [o.strip() for o in raw.split(",") if o.strip()]
+    return ["*"]
+
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
+    allow_origins=_cors_origins(),
+    allow_credentials=False,
     allow_methods=["*"],
     allow_headers=["*"],
 )

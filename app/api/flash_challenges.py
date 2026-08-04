@@ -1,5 +1,5 @@
 from fastapi import APIRouter, HTTPException, Body, Depends
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List
 import uuid
 from app.database import supabase
@@ -22,7 +22,7 @@ def _valid_uuid(value: str) -> bool:
         return False
 
 def _seed_payload(user_id: str | None = None) -> List[Dict[str, Any]]:
-    now = datetime.utcnow()
+    now = datetime.now(timezone.utc)
     return [
         {
             "id": item[0],
@@ -47,23 +47,32 @@ async def get_flash_challenges(user_id: str | None = None):
     try:
         response = supabase.table("flash_challenges").select("*").eq("is_active", True).execute()
         rows = response.data or []
+        if not rows:
+            return _seed_payload(user_id)
+
+        ids = [row["id"] for row in rows]
+        count_resp = supabase.table("flash_participants").select("flash_challenge_id").in_("flash_challenge_id", ids).execute()
+        counts: Dict[str, int] = {}
+        for r in (count_resp.data or []):
+            counts[r["flash_challenge_id"]] = counts.get(r["flash_challenge_id"], 0) + 1
+
+        joined_ids: set = set()
+        if user_id:
+            joined_resp = (
+                supabase.table("flash_participants")
+                .select("flash_challenge_id")
+                .eq("user_id", user_id)
+                .in_("flash_challenge_id", ids)
+                .execute()
+            )
+            joined_ids = {r["flash_challenge_id"] for r in (joined_resp.data or [])}
+
         result = []
         for row in rows:
-            count = supabase.table("flash_participants").select("id").eq("flash_challenge_id", row["id"]).execute()
-            joined = False
-            if user_id:
-                joined_resp = (
-                    supabase.table("flash_participants")
-                    .select("id")
-                    .eq("flash_challenge_id", row["id"])
-                    .eq("user_id", user_id)
-                    .execute()
-                )
-                joined = bool(joined_resp.data)
-            row["participants_count"] = len(count.data or [])
-            row["is_joined"] = joined
+            row["participants_count"] = counts.get(row["id"], 0)
+            row["is_joined"] = row["id"] in joined_ids
             result.append(row)
-        return result if result else _seed_payload(user_id)
+        return result
     except Exception:
         return _seed_payload(user_id)
 
@@ -92,7 +101,7 @@ async def join_flash_challenge(flash_id: str, payload: Dict[str, Any] = Body(...
                 "flash_challenge_id": flash_id,
                 "user_id": user_id,
                 "user_name": user_name,
-                "joined_at": datetime.utcnow().isoformat(),
+                "joined_at": datetime.now(timezone.utc).isoformat(),
             }).execute()
         challenges = await get_flash_challenges(user_id)
         item = next((x for x in challenges if x["id"] == flash_id), None)
@@ -117,7 +126,7 @@ async def share_flash_challenge(flash_id: str, payload: Dict[str, Any] = Body(..
         supabase.table("flash_shares").insert({
             "flash_challenge_id": flash_id,
             "user_id": user_id,
-            "created_at": datetime.utcnow().isoformat(),
+            "created_at": datetime.now(timezone.utc).isoformat(),
         }).execute()
         challenges = await get_flash_challenges(user_id)
         return next((x for x in challenges if x["id"] == flash_id), None)

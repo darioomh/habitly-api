@@ -1,5 +1,5 @@
-from fastapi import APIRouter, HTTPException, Query, Body, Depends
-from datetime import datetime, timedelta, date
+from fastapi import APIRouter, HTTPException, Query, Body, Depends, Header
+from datetime import datetime, timedelta, date, timezone
 import calendar
 from typing import Optional, List, Dict, Any
 from pydantic import BaseModel
@@ -37,7 +37,7 @@ SEED_CHALLENGES = [
         "is_public": True,
         "is_live": True,
         "is_active": True,
-        "start_date": datetime.utcnow().isoformat(),
+        "start_date": datetime.now(timezone.utc).isoformat(),
     },
     {
         "title": "Protocolo: Enfoque Cognitivo Profundo",
@@ -51,7 +51,7 @@ SEED_CHALLENGES = [
         "is_public": True,
         "is_live": True,
         "is_active": True,
-        "start_date": datetime.utcnow().isoformat(),
+        "start_date": datetime.now(timezone.utc).isoformat(),
     },
     {
         "title": "Protocolo: Hipertrofia y Longevidad",
@@ -65,7 +65,7 @@ SEED_CHALLENGES = [
         "is_public": True,
         "is_live": True,
         "is_active": True,
-        "start_date": datetime.utcnow().isoformat(),
+        "start_date": datetime.now(timezone.utc).isoformat(),
     },
     {
         "title": "Protocolo: Regulación del Sistema Nervioso",
@@ -79,7 +79,7 @@ SEED_CHALLENGES = [
         "is_public": True,
         "is_live": True,
         "is_active": True,
-        "start_date": datetime.utcnow().isoformat(),
+        "start_date": datetime.now(timezone.utc).isoformat(),
     },
     {
         "title": "Protocolo: Inteligencia Social y Redes",
@@ -93,7 +93,7 @@ SEED_CHALLENGES = [
         "is_public": True,
         "is_live": True,
         "is_active": True,
-        "start_date": datetime.utcnow().isoformat(),
+        "start_date": datetime.now(timezone.utc).isoformat(),
     },
     {
         "title": "Comparte la App con tus Contactos",
@@ -107,7 +107,7 @@ SEED_CHALLENGES = [
         "is_public": True,
         "is_live": True,
         "is_active": True,
-        "start_date": datetime.utcnow().isoformat(),
+        "start_date": datetime.now(timezone.utc).isoformat(),
     },
 ]
 
@@ -151,13 +151,31 @@ def _add_participant_count(challenge: dict) -> dict:
     challenge.setdefault("is_active", True)
     return challenge
 
+
+def _batch_participant_counts(challenges: list) -> list:
+    if not challenges:
+        return challenges
+    try:
+        ids = [c["id"] for c in challenges]
+        count_resp = supabase.table("challenge_participants").select("challenge_id").in_("challenge_id", ids).execute()
+        counts: Dict[str, int] = {}
+        for row in (count_resp.data or []):
+            counts[row["challenge_id"]] = counts.get(row["challenge_id"], 0) + 1
+    except Exception:
+        counts = {}
+    for c in challenges:
+        c["participants_count"] = counts.get(c["id"], 0)
+        c.setdefault("is_live", True)
+        c.setdefault("is_active", True)
+    return challenges
+
 @router.get("")
 async def get_challenges():
     if not supabase:
         return []
     response = supabase.table("challenges").select("*").order("created_at", desc=True).execute()
     challenges = response.data if response.data else []
-    return [_add_participant_count(c) for c in challenges]
+    return _batch_participant_counts(challenges)
 
 @router.get("/{challenge_id}")
 async def get_challenge(challenge_id: str):
@@ -192,7 +210,7 @@ async def join_challenge(request: JoinChallengeRequest, user_id: str = Depends(g
             "challenge_id": request.challenge_id,
             "user_id": user_id,
             "user_name": request.user_name,
-            "joined_at": datetime.utcnow().isoformat(),
+            "joined_at": datetime.now(timezone.utc).isoformat(),
             "progress": 0,
             "current_streak": 0,
             "best_streak": 0,
@@ -284,13 +302,13 @@ async def get_leaderboard(challenge_id: str):
 
 
 @router.post("/auto-link-habits")
-async def auto_link_habits(category: Optional[str] = None):
+async def auto_link_habits(category: Optional[str] = None, user_id: str = Depends(get_current_user)):
     if not supabase:
         return {"linked": 0, "details": [], "note": "Supabase not configured"}
     try:
         ch_resp = supabase.table("challenges").select("id,category,title,is_active").execute()
         challenges = ch_resp.data if ch_resp.data else []
-        habits_resp = supabase.table("habits").select("id,category").execute()
+        habits_resp = supabase.table("habits").select("id,category").eq("user_id", user_id).execute()
         habits = habits_resp.data if habits_resp.data else []
 
         linked = 0
@@ -308,7 +326,7 @@ async def auto_link_habits(category: Optional[str] = None):
                 exists = supabase.table("challenge_habits").select("id").eq("challenge_id", ch["id"]).eq("habit_id", h["id"]).execute()
                 if exists.data:
                     continue
-                supabase.table("challenge_habits").insert({"challenge_id": ch["id"], "habit_id": h["id"], "created_at": datetime.utcnow().isoformat()}).execute()
+                supabase.table("challenge_habits").insert({"challenge_id": ch["id"], "habit_id": h["id"], "created_at": datetime.now(timezone.utc).isoformat()}).execute()
                 linked += 1
                 details.append({"challenge_id": ch["id"], "habit_id": h["id"], "challenge_title": ch.get("title")})
 
@@ -318,11 +336,15 @@ async def auto_link_habits(category: Optional[str] = None):
 
 
 @router.post("/reset-monthly")
-async def reset_monthly_challenges(year: Optional[int] = None, month: Optional[int] = None, create_premium: bool = True):
+async def reset_monthly_challenges(year: Optional[int] = None, month: Optional[int] = None, create_premium: bool = True, x_admin_key: Optional[str] = Header(None), user_id: str = Depends(get_current_user)):
     if not supabase:
         return {"created": 0, "note": "Supabase not configured"}
+    import os as _os
+    admin_key = _os.getenv("ADMIN_KEY")
+    if admin_key and x_admin_key != admin_key:
+        raise HTTPException(status_code=403, detail="Acceso denegado")
     try:
-        today = datetime.utcnow().date()
+        today = datetime.now(timezone.utc).date()
         if not year:
             year = today.year
         if not month:
@@ -368,7 +390,7 @@ async def reset_monthly_challenges(year: Optional[int] = None, month: Optional[i
                 "is_active": True,
                 "start_date": start_date,
                 "end_date": end_date,
-                "created_at": datetime.utcnow().isoformat()
+                "created_at": datetime.now(timezone.utc).isoformat()
             }
             resp = supabase.table("challenges").insert(challenge).execute()
             if resp.data:
@@ -379,7 +401,7 @@ async def reset_monthly_challenges(year: Optional[int] = None, month: Optional[i
                     habits_resp = supabase.table("habits").select("id").eq("category", cat).execute()
                     habits = habits_resp.data if habits_resp.data else []
                     for h in habits:
-                        supabase.table("challenge_habits").insert({"challenge_id": ch.get("id"), "habit_id": h.get("id"), "created_at": datetime.utcnow().isoformat()}).execute()
+                        supabase.table("challenge_habits").insert({"challenge_id": ch.get("id"), "habit_id": h.get("id"), "created_at": datetime.now(timezone.utc).isoformat()}).execute()
                 except Exception:
                     pass
 
@@ -399,7 +421,7 @@ async def reset_monthly_challenges(year: Optional[int] = None, month: Optional[i
                 "is_active": True,
                 "start_date": start_date,
                 "end_date": end_date,
-                "created_at": datetime.utcnow().isoformat()
+                "created_at": datetime.now(timezone.utc).isoformat()
             }
             p_resp = supabase.table("challenges").insert(premium).execute()
             if p_resp.data:
@@ -430,7 +452,7 @@ async def track_challenge_invite(challenge_id: str, payload: Dict[str, Any] = Bo
             invite_count = int(current.get("invite_count") or 0) + 1
             response = (
                 supabase.table("challenge_invites")
-                .update({"invite_count": invite_count, "updated_at": datetime.utcnow().isoformat()})
+                .update({"invite_count": invite_count, "updated_at": datetime.now(timezone.utc).isoformat()})
                 .eq("id", current["id"])
                 .execute()
             )
@@ -439,8 +461,8 @@ async def track_challenge_invite(challenge_id: str, payload: Dict[str, Any] = Bo
             "challenge_id": challenge_id,
             "user_id": user_id,
             "invite_count": 1,
-            "created_at": datetime.utcnow().isoformat(),
-            "updated_at": datetime.utcnow().isoformat(),
+            "created_at": datetime.now(timezone.utc).isoformat(),
+            "updated_at": datetime.now(timezone.utc).isoformat(),
         }
         response = supabase.table("challenge_invites").insert(data).execute()
         return response.data[0] if response.data else data
@@ -452,17 +474,16 @@ async def get_challenge_points_log(
     challenge_id: Optional[str] = Query(None),
     user_id: Optional[str] = Query(None),
     page: int = Query(1, ge=1),
-    per_page: int = Query(50, ge=1, le=200)
+    per_page: int = Query(50, ge=1, le=200),
+    current_user_id: str = Depends(get_current_user)
 ):
     if not supabase:
         return {"items": [], "total": 0, "page": page, "per_page": per_page}
     try:
-        resp = supabase.table("challenge_points_log").select("*").order("created_at", desc=True).execute()
+        resp = supabase.table("challenge_points_log").select("*").eq("user_id", current_user_id).order("created_at", desc=True).execute()
         items = resp.data if resp.data else []
         if challenge_id:
             items = [i for i in items if i.get("challenge_id") == challenge_id]
-        if user_id:
-            items = [i for i in items if i.get("user_id") == user_id]
         total = len(items)
         start = (page - 1) * per_page
         end = start + per_page
@@ -472,13 +493,16 @@ async def get_challenge_points_log(
 
 
 @router.post("/{challenge_id}/participants/{participant_user_id}/add-points")
-async def add_points_to_participant(challenge_id: str, participant_user_id: str, payload: Dict[str, int] = Body(...)):
+async def add_points_to_participant(challenge_id: str, participant_user_id: str, payload: Dict[str, int] = Body(...), user_id: str = Depends(get_current_user)):
     if not supabase:
         points = int(payload.get("points") or 0)
         return {"challenge_id": challenge_id, "user_id": participant_user_id, "added": points, "total_points": points}
 
     if not is_valid_uuid(challenge_id) or not is_valid_uuid(participant_user_id):
         raise HTTPException(status_code=400, detail="Invalid ID format")
+
+    if str(participant_user_id) != str(user_id):
+        raise HTTPException(status_code=403, detail="Solo puedes añadir puntos a tu propio perfil")
 
     try:
         points = int(payload.get("points") or 0)
@@ -497,7 +521,7 @@ async def add_points_to_participant(challenge_id: str, participant_user_id: str,
         current = int(participant.get("total_points") or 0)
         new_total = current + points
 
-        update_resp = supabase.table("challenge_participants").update({"total_points": new_total, "updated_at": datetime.utcnow().isoformat()}).eq("id", participant["id"]).execute()
+        update_resp = supabase.table("challenge_participants").update({"total_points": new_total, "updated_at": datetime.now(timezone.utc).isoformat()}).eq("id", participant["id"]).execute()
         if update_resp.data:
             return update_resp.data[0]
         return {"challenge_id": challenge_id, "user_id": participant_user_id, "total_points": new_total}

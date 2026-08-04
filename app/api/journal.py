@@ -159,11 +159,16 @@ async def save_journal_entry(entry: JournalEntryCreate, user_id: str = Depends(g
         raise HTTPException(status_code=500, detail=detail)
 
 @router.delete("/{entry_id}")
-async def delete_journal_entry(entry_id: str):
+async def delete_journal_entry(entry_id: str, user_id: str = Depends(get_current_user)):
     if not supabase:
         raise HTTPException(status_code=500, detail="Supabase not configured")
     try:
-        response = supabase.table("journal_entries").delete().eq("id", entry_id).execute()
+        response = supabase.table("journal_entries").select("id").eq("id", entry_id).eq("user_id", user_id).execute()
+        if not response.data:
+            raise HTTPException(status_code=404, detail="Journal entry not found")
+        supabase.table("journal_entries").delete().eq("id", entry_id).eq("user_id", user_id).execute()
         return {"success": True}
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
